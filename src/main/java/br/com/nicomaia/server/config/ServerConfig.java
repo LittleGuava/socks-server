@@ -11,6 +11,7 @@ import br.com.nicomaia.server.net.resolvers.DomainInetResolver;
 import br.com.nicomaia.server.net.resolvers.InetResolver;
 import br.com.nicomaia.server.net.resolvers.IpInetResolver;
 import java.util.Map;
+import java.util.function.Supplier;
 
 public record ServerConfig(
     int port,
@@ -21,6 +22,20 @@ public record ServerConfig(
   private static final int DEFAULT_PORT = 5353;
 
   public static ServerConfig fromArgs(String[] args, Metrics metrics) {
+    return fromArgs(args, metrics, Socks5Credentials::fromEnvironment);
+  }
+
+  /**
+   * Package-private seam for testing: lets tests supply credentials (or a supplier that throws)
+   * without touching real environment variables. Production code always goes through {@link
+   * #fromArgs(String[], Metrics)}, which reads {@code nexus_deps_USR}/{@code nexus_deps_psw}.
+   *
+   * <p>Deliberately does not catch exceptions from {@code credentialsSupplier}: a missing/blank
+   * credential must propagate as {@link IllegalStateException} so the caller (see {@link
+   * br.com.nicomaia.server.Main}) can refuse to start the server.
+   */
+  static ServerConfig fromArgs(
+      String[] args, Metrics metrics, Supplier<Socks5Credentials> credentialsSupplier) {
     int port = (args.length > 0) ? Integer.parseInt(args[0]) : DEFAULT_PORT;
 
     Map<AddressType, InetResolver> resolvers =
@@ -34,7 +49,7 @@ public record ServerConfig(
     HandlersHolder handlers = new HandlersHolder();
     handlers.register(CommandType.CONNECT, new ConnectHandler(metrics));
 
-    Socks5Credentials credentials = Socks5Credentials.fromEnvironment();
+    Socks5Credentials credentials = credentialsSupplier.get();
 
     return new ServerConfig(port, addressResolver, handlers, credentials);
   }

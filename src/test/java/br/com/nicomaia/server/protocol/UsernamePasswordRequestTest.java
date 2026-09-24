@@ -7,15 +7,16 @@ import org.junit.jupiter.api.Test;
 
 class UsernamePasswordRequestTest {
 
+  private static final byte[] USERNAME_BYTES = "alice".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] PASSWORD_BYTES = "s3cret".getBytes(StandardCharsets.UTF_8);
+
   @Test
   void shouldStoreAllFields() {
-    var request =
-        new UsernamePasswordRequest(
-            (byte) 0x01, "alice".getBytes(StandardCharsets.UTF_8), "s3cret".getBytes(StandardCharsets.UTF_8));
+    var request = new UsernamePasswordRequest((byte) 0x01, USERNAME_BYTES, PASSWORD_BYTES);
 
     assertEquals((byte) 0x01, request.version());
-    assertArrayEquals("alice".getBytes(StandardCharsets.UTF_8), request.username());
-    assertArrayEquals("s3cret".getBytes(StandardCharsets.UTF_8), request.password());
+    assertArrayEquals(USERNAME_BYTES, request.username());
+    assertArrayEquals(PASSWORD_BYTES, request.password());
   }
 
   @Test
@@ -33,9 +34,7 @@ class UsernamePasswordRequestTest {
 
   @Test
   void shouldDefensivelyCopyOnAccess() {
-    var request =
-        new UsernamePasswordRequest(
-            (byte) 0x01, "alice".getBytes(StandardCharsets.UTF_8), "s3cret".getBytes(StandardCharsets.UTF_8));
+    var request = new UsernamePasswordRequest((byte) 0x01, USERNAME_BYTES, PASSWORD_BYTES);
 
     request.username()[0] = 'X';
     request.password()[0] = 'X';
@@ -46,9 +45,7 @@ class UsernamePasswordRequestTest {
 
   @Test
   void shouldNotLeakCredentialsInToString() {
-    var request =
-        new UsernamePasswordRequest(
-            (byte) 0x01, "alice".getBytes(StandardCharsets.UTF_8), "s3cret".getBytes(StandardCharsets.UTF_8));
+    var request = new UsernamePasswordRequest((byte) 0x01, USERNAME_BYTES, PASSWORD_BYTES);
 
     String result = request.toString();
 

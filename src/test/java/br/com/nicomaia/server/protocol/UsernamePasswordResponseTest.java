@@ -19,4 +19,19 @@ class UsernamePasswordResponseTest {
 
     assertArrayEquals(new byte[] {0x01, 0x01}, response.toBytes());
   }
+
+  @Test
+  void forOutcomeShouldAlwaysUseRfc1929Version() {
+    assertEquals(
+        UsernamePasswordResponse.VERSION, UsernamePasswordResponse.forOutcome(true).version());
+    assertEquals(
+        UsernamePasswordResponse.VERSION, UsernamePasswordResponse.forOutcome(false).version());
+  }
+
+  @Test
+  void forOutcomeShouldEncodeSuccessAndFailure() {
+    assertArrayEquals(new byte[] {0x01, 0x00}, UsernamePasswordResponse.forOutcome(true).toBytes());
+    assertArrayEquals(
+        new byte[] {0x01, 0x01}, UsernamePasswordResponse.forOutcome(false).toBytes());
+  }
 }
