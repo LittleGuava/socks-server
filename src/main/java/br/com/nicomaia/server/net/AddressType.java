@@ -3,6 +3,7 @@ package br.com.nicomaia.server.net;
 import lombok.Getter;
 
 import java.util.Arrays;
+import java.util.Optional;
 
 @Getter
 public enum AddressType {
@@ -12,11 +13,10 @@ public enum AddressType {
 
     private final byte typeCode;
 
-    public static AddressType valueOf(byte typeCode) {
+    public static Optional<AddressType> fromCode(int typeCode) {
         return Arrays.stream(values())
-                .filter(commandType -> commandType.typeCode == typeCode)
-                .findFirst()
-                .get();
+                .filter(addressType -> (addressType.typeCode & 0xFF) == typeCode)
+                .findFirst();
     }
 
     AddressType(byte typeCode) {

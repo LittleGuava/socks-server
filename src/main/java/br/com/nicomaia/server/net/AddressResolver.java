@@ -10,7 +10,7 @@ public class AddressResolver {
     private final Map<AddressType, InetResolver> resolvers;
 
     public AddressResolver(Map<AddressType, InetResolver> resolvers) {
-        this.resolvers = resolvers;
+        this.resolvers = Map.copyOf(resolvers);
     }
 
     public InetAddress resolve(Address address) throws UnknownHostException, ResolverNotFoundException {

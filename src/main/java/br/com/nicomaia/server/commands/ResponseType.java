@@ -1,6 +1,7 @@
 package br.com.nicomaia.server.commands;
 
 import java.util.Arrays;
+import java.util.Optional;
 
 public enum ResponseType {
     SUCCEEDED((byte) 0x00),
@@ -24,10 +25,9 @@ public enum ResponseType {
         return number;
     }
 
-    public static ResponseType valueOf(byte number) {
+    public static Optional<ResponseType> fromCode(int number) {
         return Arrays.stream(values())
-                .filter(commandType -> commandType.number == number)
-                .findFirst()
-                .get();
+                .filter(responseType -> (responseType.number & 0xFF) == number)
+                .findFirst();
     }
 }

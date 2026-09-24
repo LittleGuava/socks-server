@@ -4,36 +4,54 @@ import br.com.nicomaia.server.transfer.ClientServerTransfer;
 import br.com.nicomaia.server.commands.Command;
 import br.com.nicomaia.server.commands.CommandResponse;
 import br.com.nicomaia.server.commands.FailureCommandResponse;
+import br.com.nicomaia.server.commands.ResponseType;
 import br.com.nicomaia.server.commands.SuccessCommandResponse;
 
 import java.io.IOException;
+import java.net.ConnectException;
+import java.net.InetSocketAddress;
+import java.net.NoRouteToHostException;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class ConnectHandler implements CommandHandler {
-    public void handle(Socket client, Command command) {
-        try {
-            Socket proxiedConnection = new Socket(command.getAddress(), command.getPort());
-            var response = new SuccessCommandResponse(command, proxiedConnection);
+    private static final Logger LOGGER = Logger.getLogger(ConnectHandler.class.getName());
+    private static final int CONNECT_TIMEOUT_MILLIS = 10_000;
 
-            ClientServerTransfer transfer = new ClientServerTransfer(client, proxiedConnection);
-            transfer.start();
-
-            sendResponse(client, response);
-        } catch (IOException e) {
-            e.printStackTrace();
-
+    @Override
+    public void handle(Socket client, Command command) throws IOException {
+        try (Socket proxiedConnection = new Socket()) {
             try {
-                sendResponse(client, new FailureCommandResponse(command));
-            } catch (IOException ex) {
-                throw new RuntimeException(ex);
+                proxiedConnection.connect(
+                        new InetSocketAddress(command.getAddress(), command.getPort()), CONNECT_TIMEOUT_MILLIS);
+            } catch (IOException e) {
+                sendResponse(client, new FailureCommandResponse(command, responseFor(e)));
+                LOGGER.log(Level.FINE, "Outbound SOCKS5 connection failed", e);
+                return;
             }
+
+            sendResponse(client, new SuccessCommandResponse(command, proxiedConnection));
+            new ClientServerTransfer(client, proxiedConnection).transfer();
         }
     }
 
-    private void sendResponse(Socket client, CommandResponse response) throws IOException {
-        System.out.println(response);
+    private static ResponseType responseFor(IOException exception) {
+        if (exception instanceof ConnectException) {
+            return ResponseType.CONNECTION_REFUSED;
+        }
+        if (exception instanceof NoRouteToHostException) {
+            return ResponseType.NETWORK_UNREACHABLE;
+        }
+        if (exception instanceof SocketTimeoutException) {
+            return ResponseType.TTL_EXPIRED;
+        }
+        return ResponseType.HOST_UNREACHABLE;
+    }
 
-        client.getOutputStream().write(response.getBytes(client));
+    private void sendResponse(Socket client, CommandResponse response) throws IOException {
+        client.getOutputStream().write(response.getBytes());
         client.getOutputStream().flush();
     }
 }

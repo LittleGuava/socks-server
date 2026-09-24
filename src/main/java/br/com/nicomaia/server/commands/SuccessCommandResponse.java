@@ -9,4 +9,9 @@ public class SuccessCommandResponse extends CommandResponse {
         super(command, ResponseType.SUCCEEDED);
         this.socket = socket;
     }
+
+    @Override
+    public byte[] getBytes() {
+        return super.getBytes(socket);
+    }
 }
