@@ -18,6 +18,11 @@ class SupportedAuthTypeTest {
   }
 
   @Test
+  void shouldReturnNoAcceptableMethodsForByte0xFF() {
+    assertEquals((byte) 0xFF, SupportedAuthType.NO_ACCEPTABLE_METHODS.getNumber());
+  }
+
+  @Test
   void shouldParseValidAuthTypesFromByteArray() {
     byte[] buffer = {0x00, 0x02};
     Set<SupportedAuthType> result = SupportedAuthType.valueOf(buffer);

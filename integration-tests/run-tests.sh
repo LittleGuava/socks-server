@@ -1,7 +1,9 @@
 #!/bin/sh
 set -e
 
-PROXY="socks5://socks-server:5353"
+SOCKS_USER="${SOCKS_USER:-testuser}"
+SOCKS_PASS="${SOCKS_PASS:-testpassword}"
+PROXY="socks5://${SOCKS_USER}:${SOCKS_PASS}@socks-server:5353"
 PASSED=0
 FAILED=0
 TOTAL=0
@@ -98,7 +100,7 @@ fi
 # --- Test 6: HTTPS via SOCKS5h (DNS resolved by proxy) ---
 echo ""
 echo "── Test 6: HTTPS via socks5h (proxy-side DNS) ──"
-HTTP_CODE=$(curl -4 -s -o /dev/null -w "%{http_code}" --proxy "socks5h://socks-server:5353" --max-time 10 https://httpbin.org/get 2>/dev/null || echo "000")
+HTTP_CODE=$(curl -4 -s -o /dev/null -w "%{http_code}" --proxy "socks5h://${SOCKS_USER}:${SOCKS_PASS}@socks-server:5353" --max-time 10 https://httpbin.org/get 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "200" ]; then
     pass "HTTPS via socks5h works"
 else
@@ -213,6 +215,26 @@ if [ "$HTTP_CODE" != "200" ]; then
     pass "Refused connection handled gracefully (got $HTTP_CODE)"
 else
     fail "Refused connection" "expected failure, got HTTP 200"
+fi
+
+# --- Test 14: Wrong credentials are rejected ---
+echo ""
+echo "── Test 14: Wrong credentials rejected ──"
+HTTP_CODE=$(curl -4 -s -o /dev/null -w "%{http_code}" --proxy "socks5://${SOCKS_USER}:wrong-password@socks-server:5353" --max-time 5 http://httpbin.org/get 2>/dev/null || true)
+if [ "$HTTP_CODE" != "200" ]; then
+    pass "Wrong credentials correctly rejected (got $HTTP_CODE)"
+else
+    fail "Wrong credentials" "expected authentication failure, got HTTP 200"
+fi
+
+# --- Test 15: No credentials (NO_AUTH) is rejected ---
+echo ""
+echo "── Test 15: Missing credentials (NO_AUTH) rejected ──"
+HTTP_CODE=$(curl -4 -s -o /dev/null -w "%{http_code}" --proxy "socks5://socks-server:5353" --max-time 5 http://httpbin.org/get 2>/dev/null || true)
+if [ "$HTTP_CODE" != "200" ]; then
+    pass "Missing credentials correctly rejected (got $HTTP_CODE)"
+else
+    fail "Missing credentials" "expected authentication failure, got HTTP 200"
 fi
 
 # Verify proxy still works after negative tests

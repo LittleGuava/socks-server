@@ -4,7 +4,7 @@ A lightweight SOCKS5 proxy server built with Java 26 Virtual Threads.
 
 ## Features
 
-- **SOCKS5 protocol** — `CONNECT` command with `NO_AUTH` authentication
+- **SOCKS5 protocol** — `CONNECT` command with mandatory username/password authentication (RFC 1929)
 - **Virtual Threads** — scales to thousands of concurrent connections
 - **TUI Dashboard** — real-time metrics display (ngrok-style)
 - **Update Checker** — notifies when a new version is available
@@ -14,6 +14,27 @@ A lightweight SOCKS5 proxy server built with Java 26 Virtual Threads.
 - **JDK 26+** (recommended: [Azul Zulu](https://www.azul.com/downloads/))
 - **Maven 3.9+**
 - **Docker** (for integration tests)
+
+## Authentication
+
+The server requires SOCKS5 username/password authentication (RFC 1929) — plain `NO_AUTH`
+negotiations are rejected. Credentials are read once at startup from environment variables and
+the process refuses to start if either is missing:
+
+| Variable | Description |
+|---|---|
+| `nexus_deps_USR` | Required username |
+| `nexus_deps_psw` | Required password |
+
+```bash
+export nexus_deps_USR=myuser
+export nexus_deps_psw=mypassword
+java -jar target/server-*.jar
+```
+
+Clients must be configured to use SOCKS5 with username/password auth (not "no authentication").
+Note that RFC 1929 sends credentials in cleartext over the TCP connection — combine this with
+network-level controls (firewall/VPN) if the proxy is reachable over an untrusted network.
 
 ## Quick Start
 
