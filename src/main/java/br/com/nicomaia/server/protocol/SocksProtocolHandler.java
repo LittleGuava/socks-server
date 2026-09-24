@@ -1,5 +1,6 @@
 package br.com.nicomaia.server.protocol;
 
+import br.com.nicomaia.server.auth.Socks5Credentials;
 import br.com.nicomaia.server.commands.Command;
 import br.com.nicomaia.server.commands.CommandType;
 import br.com.nicomaia.server.commands.handlers.HandlersHolder;
@@ -8,8 +9,10 @@ import br.com.nicomaia.server.net.AddressResolver;
 import br.com.nicomaia.server.net.AddressType;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -19,41 +22,29 @@ public class SocksProtocolHandler {
 
   private final AddressResolver addressResolver;
   private final HandlersHolder handlers;
+  private final Socks5Credentials credentials;
 
-  public SocksProtocolHandler(AddressResolver addressResolver, HandlersHolder handlers) {
+  public SocksProtocolHandler(
+      AddressResolver addressResolver, HandlersHolder handlers, Socks5Credentials credentials) {
     this.addressResolver = addressResolver;
     this.handlers = handlers;
+    this.credentials = credentials;
   }
 
   public void handle(Socket clientSocket) {
     try {
       InputStream in = clientSocket.getInputStream();
+      OutputStream out = clientSocket.getOutputStream();
 
-      // --- Auth Negotiation ---
-      byte[] buffer = new byte[2];
-      in.read(buffer);
-
-      byte socksVersion = buffer[0];
-      byte availableClientAuthTypes = buffer[1];
-
-      buffer = new byte[availableClientAuthTypes];
-      in.read(buffer);
-
-      var authRequest =
-          new AuthRequest(
-              socksVersion, availableClientAuthTypes, SupportedAuthType.valueOf(buffer));
-      var authResponse = new AuthResponse(socksVersion, SupportedAuthType.NO_AUTH);
-
-      logger.info(authRequest.toString());
-      logger.info(authResponse.toString());
-
-      clientSocket.getOutputStream().write(authResponse.toBytes());
+      if (!authenticate(in, out)) {
+        closeQuietly(clientSocket);
+        return;
+      }
 
       // --- Command ---
-      buffer = new byte[4];
-      in.read(buffer);
+      byte[] buffer = SocketReader.readFully(in, 4);
 
-      socksVersion = buffer[0];
+      byte socksVersion = buffer[0];
       CommandType commandType = CommandType.valueOf(buffer[1]);
       AddressType addressType = AddressType.valueOf(buffer[3]);
 
@@ -69,6 +60,51 @@ public class SocksProtocolHandler {
       logger.log(Level.WARNING, "Error handling SOCKS connection", e);
       closeQuietly(clientSocket);
     }
+  }
+
+  /**
+   * Performs the SOCKS5 method negotiation followed by the RFC 1929 username/password
+   * sub-negotiation. Only clients offering the {@code USERNAME} method are accepted; every other
+   * negotiation (including plain {@code NO_AUTH}) is rejected with {@code NO_ACCEPTABLE_METHODS}.
+   *
+   * @return {@code true} if the client authenticated successfully.
+   */
+  private boolean authenticate(InputStream in, OutputStream out) throws IOException {
+    byte[] header = SocketReader.readFully(in, 2);
+    byte socksVersion = header[0];
+    int methodCount = header[1] & 0xFF;
+
+    byte[] methodBytes = SocketReader.readFully(in, methodCount);
+    Set<SupportedAuthType> offeredMethods = SupportedAuthType.valueOf(methodBytes);
+
+    var authRequest = new AuthRequest(socksVersion, header[1], offeredMethods);
+    logger.info(authRequest.toString());
+
+    if (!offeredMethods.contains(SupportedAuthType.USERNAME)) {
+      var rejection = new AuthResponse(socksVersion, SupportedAuthType.NO_ACCEPTABLE_METHODS);
+      logger.warning("Client did not offer username/password authentication; rejecting");
+      out.write(rejection.toBytes());
+      out.flush();
+      return false;
+    }
+
+    var authResponse = new AuthResponse(socksVersion, SupportedAuthType.USERNAME);
+    logger.info(authResponse.toString());
+    out.write(authResponse.toBytes());
+    out.flush();
+
+    var credentialsRequest = SocketReader.readUsernamePassword(in);
+    boolean valid =
+        credentials.matches(credentialsRequest.username(), credentialsRequest.password());
+
+    out.write(new UsernamePasswordResponse(credentialsRequest.version(), valid).toBytes());
+    out.flush();
+
+    if (!valid) {
+      logger.warning("Rejected connection: invalid username/password");
+    }
+
+    return valid;
   }
 
   private void closeQuietly(Socket socket) {

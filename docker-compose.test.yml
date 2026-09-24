@@ -5,6 +5,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "5353:5353"
+    environment:
+      nexus_deps_USR: testuser
+      nexus_deps_psw: testpassword
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/5353' 2>/dev/null || exit 1"]
       interval: 2s
@@ -15,6 +18,9 @@ services:
     build:
       context: ./integration-tests
       dockerfile: Dockerfile
+    environment:
+      SOCKS_USER: testuser
+      SOCKS_PASS: testpassword
     depends_on:
       socks-server:
         condition: service_healthy

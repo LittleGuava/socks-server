@@ -17,7 +17,15 @@ public class Main {
     var metrics = Metrics.instance();
 
     UpdateChecker.checkAsync();
-    var config = ServerConfig.fromArgs(configArgs, metrics);
+
+    ServerConfig config;
+    try {
+      config = ServerConfig.fromArgs(configArgs, metrics);
+    } catch (IllegalStateException e) {
+      System.err.println("Fatal: " + e.getMessage());
+      System.exit(1);
+      return;
+    }
 
     if (tuiEnabled) {
       LogConfig.configureFileLogging();

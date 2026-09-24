@@ -8,7 +8,8 @@ import java.util.stream.Collectors;
 
 public enum SupportedAuthType {
   NO_AUTH((byte) 0x00),
-  USERNAME((byte) 0x02);
+  USERNAME((byte) 0x02),
+  NO_ACCEPTABLE_METHODS((byte) 0xFF);
 
   private final byte number;
 

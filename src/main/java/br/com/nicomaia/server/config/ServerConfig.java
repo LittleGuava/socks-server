@@ -1,5 +1,6 @@
 package br.com.nicomaia.server.config;
 
+import br.com.nicomaia.server.auth.Socks5Credentials;
 import br.com.nicomaia.server.commands.CommandType;
 import br.com.nicomaia.server.commands.handlers.ConnectHandler;
 import br.com.nicomaia.server.commands.handlers.HandlersHolder;
@@ -11,7 +12,11 @@ import br.com.nicomaia.server.net.resolvers.InetResolver;
 import br.com.nicomaia.server.net.resolvers.IpInetResolver;
 import java.util.Map;
 
-public record ServerConfig(int port, AddressResolver addressResolver, HandlersHolder handlers) {
+public record ServerConfig(
+    int port,
+    AddressResolver addressResolver,
+    HandlersHolder handlers,
+    Socks5Credentials credentials) {
 
   private static final int DEFAULT_PORT = 5353;
 
@@ -29,6 +34,8 @@ public record ServerConfig(int port, AddressResolver addressResolver, HandlersHo
     HandlersHolder handlers = new HandlersHolder();
     handlers.register(CommandType.CONNECT, new ConnectHandler(metrics));
 
-    return new ServerConfig(port, addressResolver, handlers);
+    Socks5Credentials credentials = Socks5Credentials.fromEnvironment();
+
+    return new ServerConfig(port, addressResolver, handlers, credentials);
   }
 }
