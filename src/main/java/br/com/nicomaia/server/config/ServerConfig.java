@@ -1,5 +1,6 @@
 package br.com.nicomaia.server.config;
 
+import br.com.nicomaia.server.auth.Socks5Credentials;
 import br.com.nicomaia.server.commands.CommandType;
 import br.com.nicomaia.server.commands.handlers.ConnectHandler;
 import br.com.nicomaia.server.commands.handlers.HandlersHolder;
@@ -9,14 +10,77 @@ import br.com.nicomaia.server.net.AddressType;
 import br.com.nicomaia.server.net.resolvers.DomainInetResolver;
 import br.com.nicomaia.server.net.resolvers.InetResolver;
 import br.com.nicomaia.server.net.resolvers.IpInetResolver;
+import br.com.nicomaia.server.protocol.Socks5Authenticator;
+import br.com.nicomaia.server.transfer.ClientServerTransfer;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
-public record ServerConfig(int port, AddressResolver addressResolver, HandlersHolder handlers) {
+public record ServerConfig(
+    int port,
+    AddressResolver addressResolver,
+    HandlersHolder handlers,
+    Socks5Authenticator authenticator,
+    Duration idleTimeout) {
+
+  /**
+   * Opt-out flag that starts the server without authentication. Only for strictly controlled
+   * environments (local development, isolated test networks); never on a reachable network.
+   */
+  public static final String NO_AUTH_FLAG = "--no-auth";
+
+  /**
+   * {@code --idle-timeout=SECONDS}: close a relay after this long without traffic in either
+   * direction; {@code 0} disables it. Defaults to {@link
+   * ClientServerTransfer#DEFAULT_IDLE_TIMEOUT}.
+   */
+  public static final String IDLE_TIMEOUT_OPTION = "--idle-timeout";
 
   private static final int DEFAULT_PORT = 5353;
 
   public static ServerConfig fromArgs(String[] args, Metrics metrics) {
-    int port = (args.length > 0) ? Integer.parseInt(args[0]) : DEFAULT_PORT;
+    return fromArgs(args, metrics, System::getenv);
+  }
+
+  /**
+   * Package-private seam for testing: {@code env} replaces {@link System#getenv(String)} so tests
+   * don't depend on the real environment.
+   *
+   * @throws IllegalArgumentException for malformed arguments (unknown option, invalid port)
+   * @throws IllegalStateException for an unusable configuration: missing/invalid credentials, or
+   *     {@link #NO_AUTH_FLAG} combined with credentials. The caller (see {@link
+   *     br.com.nicomaia.server.Main}) must refuse to start in both cases.
+   */
+  static ServerConfig fromArgs(String[] args, Metrics metrics, Function<String, String> env) {
+    boolean noAuth = false;
+    Duration idleTimeout = ClientServerTransfer.DEFAULT_IDLE_TIMEOUT;
+    boolean idleTimeoutGiven = false;
+    List<String> positional = new ArrayList<>();
+    for (String arg : args) {
+      if (NO_AUTH_FLAG.equals(arg)) {
+        noAuth = true;
+      } else if (arg.equals(IDLE_TIMEOUT_OPTION)) {
+        throw new IllegalArgumentException(
+            IDLE_TIMEOUT_OPTION + " requires a value: " + IDLE_TIMEOUT_OPTION + "=SECONDS");
+      } else if (arg.startsWith(IDLE_TIMEOUT_OPTION + "=")) {
+        if (idleTimeoutGiven) {
+          throw new IllegalArgumentException(IDLE_TIMEOUT_OPTION + " given more than once");
+        }
+        idleTimeoutGiven = true;
+        idleTimeout = parseIdleTimeout(arg.substring(IDLE_TIMEOUT_OPTION.length() + 1));
+      } else if (arg.startsWith("-")) {
+        throw new IllegalArgumentException("Unknown option: " + arg);
+      } else {
+        positional.add(arg);
+      }
+    }
+    if (positional.size() > 1) {
+      throw new IllegalArgumentException("Unexpected argument: " + positional.get(1));
+    }
+
+    int port = positional.isEmpty() ? DEFAULT_PORT : parsePort(positional.get(0));
 
     Map<AddressType, InetResolver> resolvers =
         Map.of(
@@ -27,8 +91,63 @@ public record ServerConfig(int port, AddressResolver addressResolver, HandlersHo
     AddressResolver addressResolver = new AddressResolver(resolvers);
 
     HandlersHolder handlers = new HandlersHolder();
-    handlers.register(CommandType.CONNECT, new ConnectHandler(metrics));
+    handlers.register(CommandType.CONNECT, new ConnectHandler(metrics, idleTimeout));
 
-    return new ServerConfig(port, addressResolver, handlers);
+    return new ServerConfig(
+        port, addressResolver, handlers, authenticator(noAuth, env), idleTimeout);
+  }
+
+  private static Duration parseIdleTimeout(String value) {
+    if (value.startsWith("-")) {
+      throw new IllegalArgumentException(
+          IDLE_TIMEOUT_OPTION + " must not be negative (0 disables): " + value);
+    }
+    // Plain digits only: Integer.parseInt would also accept a leading '+'.
+    if (value.isEmpty() || !value.chars().allMatch(c -> c >= '0' && c <= '9')) {
+      throw new IllegalArgumentException(
+          "Invalid " + IDLE_TIMEOUT_OPTION + " (whole seconds, 0 disables): " + value);
+    }
+    try {
+      return Duration.ofSeconds(Integer.parseInt(value));
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(
+          IDLE_TIMEOUT_OPTION + " too large (max " + Integer.MAX_VALUE + " seconds): " + value);
+    }
+  }
+
+  private static Socks5Authenticator authenticator(boolean noAuth, Function<String, String> env) {
+    if (!noAuth) {
+      return Socks5Authenticator.requiring(Socks5Credentials.fromEnvironment(env));
+    }
+    // Contradictory configuration must fail closed: an operator who set credentials believes
+    // the proxy is protected, so silently ignoring them would expose an open proxy.
+    if (Socks5Credentials.isConfigured(env)) {
+      throw new IllegalStateException(
+          NO_AUTH_FLAG
+              + " conflicts with "
+              + Socks5Credentials.USERNAME_ENV
+              + "/"
+              + Socks5Credentials.PASSWORD_ENV
+              + ": unset them to run without authentication, or drop "
+              + NO_AUTH_FLAG);
+    }
+    return Socks5Authenticator.withoutAuthentication();
+  }
+
+  private static int parsePort(String value) {
+    int port;
+    try {
+      port = Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException("Invalid port: " + value);
+    }
+    if (port < 1 || port > 65_535) {
+      throw new IllegalArgumentException("Port out of range (1-65535): " + port);
+    }
+    return port;
+  }
+
+  public boolean authenticationRequired() {
+    return authenticator.isAuthenticationRequired();
   }
 }

@@ -5,30 +5,135 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.net.SocketOption;
+import java.net.StandardSocketOptions;
+import java.time.Duration;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import jdk.net.ExtendedSocketOptions;
 
 public class ClientServerTransfer {
   private static final int DEFAULT_BUFFER_SIZE = 8192;
   private static final Logger logger = Logger.getLogger(ClientServerTransfer.class.getName());
 
+  /**
+   * How long a relay may go without bytes flowing in either direction before it is torn down. Same
+   * order of magnitude as 3proxy's long-connection timeout; bounds the threads and file descriptors
+   * held by clients that open a tunnel and then forget about it.
+   */
+  public static final Duration DEFAULT_IDLE_TIMEOUT = Duration.ofMinutes(30);
+
+  /**
+   * TCP keepalive probing, where the platform supports tuning it: first probe after {@code
+   * KEEPALIVE_IDLE_SECONDS} of silence, then every {@code KEEPALIVE_INTERVAL_SECONDS}, giving up
+   * after {@code KEEPALIVE_COUNT} unanswered probes. Detects a vanished peer of an idle connection
+   * in about 90 s instead of the OS default (usually 2 h before the first probe).
+   */
+  static final int KEEPALIVE_IDLE_SECONDS = 60;
+
+  static final int KEEPALIVE_INTERVAL_SECONDS = 10;
+  static final int KEEPALIVE_COUNT = 3;
+
   private final Socket client;
   private final Socket server;
   private final Metrics metrics;
+  private final Duration idleTimeout;
 
-  public ClientServerTransfer(Socket client, Socket server, Metrics metrics) {
+  /** {@link System#nanoTime()} of the last byte read or written in either direction. */
+  private final AtomicLong lastActivity = new AtomicLong();
+
+  /**
+   * @param idleTimeout tear the relay down after this long without traffic in either direction;
+   *     {@link Duration#ZERO} disables the check
+   */
+  public ClientServerTransfer(Socket client, Socket server, Metrics metrics, Duration idleTimeout) {
+    if (idleTimeout.isNegative()) {
+      throw new IllegalArgumentException("Idle timeout must not be negative: " + idleTimeout);
+    }
+    try {
+      idleTimeout.toNanos(); // start() works in nanoseconds: fail here, not mid-relay
+    } catch (ArithmeticException e) {
+      throw new IllegalArgumentException("Idle timeout too large: " + idleTimeout, e);
+    }
     this.client = client;
     this.server = server;
     this.metrics = metrics;
+    this.idleTimeout = idleTimeout;
   }
 
   public void start() {
-    Thread.ofVirtual().name(client + " => " + server).start(() -> transfer(client, server, true));
+    enableKeepAlive(client);
+    enableKeepAlive(server);
 
-    Thread.ofVirtual().name(client + " <= " + server).start(() -> transfer(server, client, false));
+    lastActivity.set(System.nanoTime());
+    CountDownLatch finished = new CountDownLatch(2);
+
+    Thread upload =
+        Thread.ofVirtual()
+            .name(client + " => " + server)
+            .start(() -> transfer(client, server, true, finished));
+
+    Thread download =
+        Thread.ofVirtual()
+            .name(client + " <= " + server)
+            .start(() -> transfer(server, client, false, finished));
+
+    // Block until both directions finish so the caller can treat the connection as active
+    // for its whole lifetime (e.g. for accurate active-connection metrics).
+    try {
+      awaitUntilFinishedOrIdle(finished);
+      upload.join();
+      download.join();
+    } catch (InterruptedException e) {
+      // Tear the relay down so the connection doesn't outlive start(), which would leave the
+      // caller's active-connection accounting out of sync with open sockets.
+      closeQuietly(client);
+      closeQuietly(server);
+      Thread.currentThread().interrupt();
+    }
   }
 
-  private void transfer(Socket source, Socket destination, boolean isUpload) {
+  /**
+   * Waits for both directions to finish, closing both sockets if no traffic flows for {@link
+   * #idleTimeout}. This watchdog, rather than a per-socket {@code SO_TIMEOUT}, is what decides
+   * idleness: a long one-way download leaves the other direction silent without being idle, and a
+   * write blocked on a peer that stopped reading has no read timeout that could ever fire. Closing
+   * the sockets unblocks both the reads and the writes.
+   */
+  private void awaitUntilFinishedOrIdle(CountDownLatch finished) throws InterruptedException {
+    if (idleTimeout.isZero()) {
+      finished.await();
+      return;
+    }
+    long idleNanos = idleTimeout.toNanos();
+    while (true) {
+      long remaining = idleNanos - (System.nanoTime() - lastActivity.get());
+      if (remaining <= 0) {
+        logger.info(
+            () ->
+                "Closing relay "
+                    + client.getRemoteSocketAddress()
+                    + " <-> "
+                    + server.getRemoteSocketAddress()
+                    + ": idle for "
+                    + formatDuration(idleTimeout));
+        closeQuietly(client);
+        closeQuietly(server);
+        return;
+      }
+      if (finished.await(remaining, TimeUnit.NANOSECONDS)) {
+        return;
+      }
+    }
+  }
+
+  private void transfer(
+      Socket source, Socket destination, boolean isUpload, CountDownLatch finished) {
     try {
       InputStream in = source.getInputStream();
       OutputStream out = destination.getOutputStream();
@@ -36,8 +141,10 @@ public class ClientServerTransfer {
       int read;
 
       while ((read = in.read(buffer, 0, DEFAULT_BUFFER_SIZE)) >= 0) {
+        lastActivity.set(System.nanoTime());
         out.write(buffer, 0, read);
         out.flush();
+        lastActivity.set(System.nanoTime());
         if (isUpload) {
           metrics.addBytesUploaded(read);
         } else {
@@ -49,6 +156,56 @@ public class ClientServerTransfer {
     } finally {
       closeQuietly(client);
       closeQuietly(server);
+      finished.countDown();
+    }
+  }
+
+  /**
+   * Turns on TCP keepalive so a peer that disappeared without a FIN/RST (crash, NAT/firewall
+   * dropping the mapping, cable pulled) is detected and the relay released while the connection is
+   * silent. Keepalive only probes an idle connection: with unacknowledged data in flight the OS
+   * retransmission timeout applies instead, and the relay's idle timeout is the backstop.
+   *
+   * <p>Best effort: each option is set independently, so one that fails doesn't skip the others,
+   * and a failure on this socket (e.g. it was closed concurrently) is only logged at FINE. Whether
+   * the platform supports tuning at all is a property of the platform, not of a socket, so it is
+   * reported once from {@link Socket#supportedOptions()}, since the probes then follow the OS
+   * defaults (typically 2 h before the first one).
+   */
+  static void enableKeepAlive(Socket socket) {
+    if (!keepAliveTuningChecked.getAndSet(true)
+        && !socket.supportedOptions().containsAll(KEEPALIVE_TUNING_OPTIONS)) {
+      logger.info(
+          "TCP keepalive timing can't be fully tuned on this platform; OS defaults apply, so dead"
+              + " peers may only be detected by the relay idle timeout");
+    }
+    trySet(socket, StandardSocketOptions.SO_KEEPALIVE, true);
+    trySet(socket, ExtendedSocketOptions.TCP_KEEPIDLE, KEEPALIVE_IDLE_SECONDS);
+    trySet(socket, ExtendedSocketOptions.TCP_KEEPINTERVAL, KEEPALIVE_INTERVAL_SECONDS);
+    trySet(socket, ExtendedSocketOptions.TCP_KEEPCOUNT, KEEPALIVE_COUNT);
+  }
+
+  private static final Set<SocketOption<?>> KEEPALIVE_TUNING_OPTIONS =
+      Set.of(
+          ExtendedSocketOptions.TCP_KEEPIDLE,
+          ExtendedSocketOptions.TCP_KEEPINTERVAL,
+          ExtendedSocketOptions.TCP_KEEPCOUNT);
+
+  private static final AtomicBoolean keepAliveTuningChecked = new AtomicBoolean();
+
+  /** {@code "1800s"}, or {@code "1500ms"} when not a whole number of seconds; never truncates. */
+  public static String formatDuration(Duration duration) {
+    long millis = duration.toMillis();
+    return millis % 1000 == 0 ? (millis / 1000) + "s" : millis + "ms";
+  }
+
+  private static <T> void trySet(Socket socket, SocketOption<T> option, T value) {
+    try {
+      if (socket.supportedOptions().contains(option)) {
+        socket.setOption(option, value);
+      }
+    } catch (IOException | UnsupportedOperationException e) {
+      logger.log(Level.FINE, "Could not set " + option + " on " + socket, e);
     }
   }
 
