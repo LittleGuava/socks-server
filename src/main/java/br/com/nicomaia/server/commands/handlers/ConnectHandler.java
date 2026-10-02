@@ -10,6 +10,7 @@ import br.com.nicomaia.server.transfer.ClientServerTransfer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.time.Duration;
 import java.time.LocalTime;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -22,9 +23,15 @@ public class ConnectHandler implements CommandHandler {
   static final int CONNECT_TIMEOUT_MILLIS = 10_000;
 
   private final Metrics metrics;
+  private final Duration idleTimeout;
 
-  public ConnectHandler(Metrics metrics) {
+  /**
+   * @param idleTimeout how long a relay may go without traffic before it is closed (see {@link
+   *     ClientServerTransfer}); {@link Duration#ZERO} disables it
+   */
+  public ConnectHandler(Metrics metrics, Duration idleTimeout) {
     this.metrics = metrics;
+    this.idleTimeout = idleTimeout;
   }
 
   public void handle(Socket client, Command command) {
@@ -58,7 +65,8 @@ public class ConnectHandler implements CommandHandler {
     metrics.addConnectionRecord(
         new ConnectionRecord(LocalTime.now(), destination, ConnectionRecord.Status.OK, 0, 0));
 
-    ClientServerTransfer transfer = new ClientServerTransfer(client, proxiedConnection, metrics);
+    ClientServerTransfer transfer =
+        new ClientServerTransfer(client, proxiedConnection, metrics, idleTimeout);
     transfer.start();
   }
 

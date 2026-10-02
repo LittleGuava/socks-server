@@ -9,13 +9,16 @@ import br.com.nicomaia.server.protocol.Socks5Authenticator;
 import br.com.nicomaia.server.tui.Dashboard;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 class MainTest {
 
   @Test
   void shouldWarnAboutControlledEnvironmentsWhenAuthenticationIsDisabled() {
-    var config = new ServerConfig(5353, null, null, Socks5Authenticator.withoutAuthentication());
+    var config =
+        new ServerConfig(
+            5353, null, null, Socks5Authenticator.withoutAuthentication(), Duration.ZERO);
 
     String warning = Main.startupWarning(config).orElseThrow();
 
@@ -27,7 +30,11 @@ class MainTest {
   void shouldNotWarnWhenAuthenticationIsRequired() {
     var config =
         new ServerConfig(
-            5353, null, null, Socks5Authenticator.requiring(Socks5Credentials.of("a", "b")));
+            5353,
+            null,
+            null,
+            Socks5Authenticator.requiring(Socks5Credentials.of("a", "b")),
+            Duration.ZERO);
 
     assertTrue(Main.startupWarning(config).isEmpty());
   }

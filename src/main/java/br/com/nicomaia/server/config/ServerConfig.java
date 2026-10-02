@@ -11,6 +11,8 @@ import br.com.nicomaia.server.net.resolvers.DomainInetResolver;
 import br.com.nicomaia.server.net.resolvers.InetResolver;
 import br.com.nicomaia.server.net.resolvers.IpInetResolver;
 import br.com.nicomaia.server.protocol.Socks5Authenticator;
+import br.com.nicomaia.server.transfer.ClientServerTransfer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,13 +22,21 @@ public record ServerConfig(
     int port,
     AddressResolver addressResolver,
     HandlersHolder handlers,
-    Socks5Authenticator authenticator) {
+    Socks5Authenticator authenticator,
+    Duration idleTimeout) {
 
   /**
    * Opt-out flag that starts the server without authentication. Only for strictly controlled
    * environments (local development, isolated test networks); never on a reachable network.
    */
   public static final String NO_AUTH_FLAG = "--no-auth";
+
+  /**
+   * {@code --idle-timeout=SECONDS}: close a relay after this long without traffic in either
+   * direction; {@code 0} disables it. Defaults to {@link
+   * ClientServerTransfer#DEFAULT_IDLE_TIMEOUT}.
+   */
+  public static final String IDLE_TIMEOUT_OPTION = "--idle-timeout";
 
   private static final int DEFAULT_PORT = 5353;
 
@@ -35,8 +45,8 @@ public record ServerConfig(
   }
 
   /**
-   * Package-private seam for testing: {@code env} replaces {@link System#getenv(String)} so
-   * tests don't depend on the real environment.
+   * Package-private seam for testing: {@code env} replaces {@link System#getenv(String)} so tests
+   * don't depend on the real environment.
    *
    * @throws IllegalArgumentException for malformed arguments (unknown option, invalid port)
    * @throws IllegalStateException for an unusable configuration: missing/invalid credentials, or
@@ -45,10 +55,16 @@ public record ServerConfig(
    */
   static ServerConfig fromArgs(String[] args, Metrics metrics, Function<String, String> env) {
     boolean noAuth = false;
+    Duration idleTimeout = ClientServerTransfer.DEFAULT_IDLE_TIMEOUT;
     List<String> positional = new ArrayList<>();
     for (String arg : args) {
       if (NO_AUTH_FLAG.equals(arg)) {
         noAuth = true;
+      } else if (arg.equals(IDLE_TIMEOUT_OPTION)) {
+        throw new IllegalArgumentException(
+            IDLE_TIMEOUT_OPTION + " requires a value: " + IDLE_TIMEOUT_OPTION + "=SECONDS");
+      } else if (arg.startsWith(IDLE_TIMEOUT_OPTION + "=")) {
+        idleTimeout = parseIdleTimeout(arg.substring(IDLE_TIMEOUT_OPTION.length() + 1));
       } else if (arg.startsWith("-")) {
         throw new IllegalArgumentException("Unknown option: " + arg);
       } else {
@@ -70,9 +86,25 @@ public record ServerConfig(
     AddressResolver addressResolver = new AddressResolver(resolvers);
 
     HandlersHolder handlers = new HandlersHolder();
-    handlers.register(CommandType.CONNECT, new ConnectHandler(metrics));
+    handlers.register(CommandType.CONNECT, new ConnectHandler(metrics, idleTimeout));
 
-    return new ServerConfig(port, addressResolver, handlers, authenticator(noAuth, env));
+    return new ServerConfig(
+        port, addressResolver, handlers, authenticator(noAuth, env), idleTimeout);
+  }
+
+  private static Duration parseIdleTimeout(String value) {
+    int seconds;
+    try {
+      seconds = Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(
+          "Invalid " + IDLE_TIMEOUT_OPTION + " (whole seconds, 0 disables): " + value);
+    }
+    if (seconds < 0) {
+      throw new IllegalArgumentException(
+          IDLE_TIMEOUT_OPTION + " must not be negative (0 disables): " + seconds);
+    }
+    return Duration.ofSeconds(seconds);
   }
 
   private static Socks5Authenticator authenticator(boolean noAuth, Function<String, String> env) {

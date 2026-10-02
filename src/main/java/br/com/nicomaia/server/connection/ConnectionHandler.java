@@ -31,7 +31,12 @@ public class ConnectionHandler {
 
   public void start() {
     try (var serverSocket = new ServerSocket(config.port())) {
-      logger.info("SOCKS server listening on port " + config.port());
+      logger.info(
+          "SOCKS server listening on port "
+              + config.port()
+              + " (relay idle timeout: "
+              + (config.idleTimeout().isZero() ? "disabled" : config.idleTimeout())
+              + ")");
 
       while (true) {
         try {

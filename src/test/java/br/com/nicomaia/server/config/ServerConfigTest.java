@@ -3,6 +3,8 @@ package br.com.nicomaia.server.config;
 import static org.junit.jupiter.api.Assertions.*;
 
 import br.com.nicomaia.server.metrics.Metrics;
+import br.com.nicomaia.server.transfer.ClientServerTransfer;
+import java.time.Duration;
 import java.util.Map;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
@@ -112,6 +114,42 @@ class ServerConfigTest {
   @Test
   void shouldRejectExtraPositionalArguments() {
     assertThrows(IllegalArgumentException.class, () -> fromArgs(CREDENTIALS_ENV, "1080", "1081"));
+  }
+
+  @Test
+  void shouldUseDefaultIdleTimeoutWhenNotGiven() {
+    assertEquals(
+        ClientServerTransfer.DEFAULT_IDLE_TIMEOUT, fromArgs(CREDENTIALS_ENV).idleTimeout());
+  }
+
+  @Test
+  void shouldParseIdleTimeoutInSecondsAlongsidePortAndFlags() {
+    ServerConfig config = fromArgs(EMPTY_ENV, "--idle-timeout=90", "1080", "--no-auth");
+
+    assertEquals(Duration.ofSeconds(90), config.idleTimeout());
+    assertEquals(1080, config.port());
+  }
+
+  @Test
+  void shouldDisableIdleTimeoutWithZero() {
+    assertEquals(Duration.ZERO, fromArgs(CREDENTIALS_ENV, "--idle-timeout=0").idleTimeout());
+  }
+
+  @Test
+  void shouldRejectInvalidIdleTimeout() {
+    String[] invalid = {
+      "--idle-timeout",
+      "--idle-timeout=",
+      "--idle-timeout=-1",
+      "--idle-timeout=5m",
+      "--idle-timeout=1.5",
+      "--idle-timeout=99999999999"
+    };
+    for (String arg : invalid) {
+      var exception =
+          assertThrows(IllegalArgumentException.class, () -> fromArgs(CREDENTIALS_ENV, arg), arg);
+      assertTrue(exception.getMessage().contains("--idle-timeout"), exception.getMessage());
+    }
   }
 
   private static ServerConfig fromArgs(Function<String, String> env, String... args) {

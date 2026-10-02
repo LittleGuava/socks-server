@@ -9,6 +9,7 @@ import br.com.nicomaia.server.commands.CommandType;
 import br.com.nicomaia.server.metrics.ConnectionRecord;
 import br.com.nicomaia.server.metrics.Metrics;
 import br.com.nicomaia.server.net.AddressType;
+import br.com.nicomaia.server.transfer.ClientServerTransfer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
@@ -55,7 +56,8 @@ class ConnectHandlerTest {
               loopback,
               destination.getLocalPort());
 
-      ConnectHandler handler = new ConnectHandler(Metrics.instance());
+      ConnectHandler handler =
+          new ConnectHandler(Metrics.instance(), ClientServerTransfer.DEFAULT_IDLE_TIMEOUT);
       // handle() now blocks until the relay ends, so run it off-thread.
       Thread handlerThread =
           Thread.ofVirtual().start(() -> handler.handle(clientHandlerSide, command));
@@ -116,7 +118,10 @@ class ConnectHandlerTest {
 
       Thread handlerThread =
           Thread.ofVirtual()
-              .start(() -> new ConnectHandler(metrics).handle(clientHandlerSide, command));
+              .start(
+                  () ->
+                      new ConnectHandler(metrics, ClientServerTransfer.DEFAULT_IDLE_TIMEOUT)
+                          .handle(clientHandlerSide, command));
 
       clientTestSide.getInputStream().readNBytes(10); // SOCKS reply for an IPv4 client
 
@@ -162,7 +167,8 @@ class ConnectHandlerTest {
               loopback,
               destination.getLocalPort());
 
-      new ConnectHandler(Metrics.instance()).handle(client, command);
+      new ConnectHandler(Metrics.instance(), ClientServerTransfer.DEFAULT_IDLE_TIMEOUT)
+          .handle(client, command);
 
       try (Socket accepted = destination.accept()) {
         accepted.setSoTimeout(3000);

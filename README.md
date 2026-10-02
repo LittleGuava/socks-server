@@ -106,6 +106,20 @@ java -jar target/server-*.jar 1080
 |---|---|
 | `--no-tui` | Disable the TUI dashboard (useful for Docker, CI, or piped output) |
 | `--no-auth` | Disable authentication — **strictly controlled environments only** (see [Running without authentication](#running-without-authentication---no-auth)) |
+| `--idle-timeout=SECONDS` | Close a tunnel after this many seconds without traffic in either direction (default `1800`, `0` disables; see [Idle connections](#idle-connections)) |
+
+### Idle connections
+
+Once a `CONNECT` tunnel is established, the server closes it after **30 minutes** without any
+bytes flowing in either direction (`--idle-timeout=SECONDS` to change it, `0` to disable).
+Traffic in a single direction — e.g. a long download — keeps the tunnel open. Long-lived but
+quiet sessions (SSH, database connections) should enable application-level keepalives, such as
+`ServerAliveInterval` in SSH, or raise the timeout.
+
+Both legs of every tunnel also use **TCP keepalive** (first probe after 60 s of silence, then
+every 10 s, giving up after 3 unanswered probes where the OS allows tuning it), so a peer that
+vanishes without closing the connection — crash, dropped NAT mapping — is detected in about
+90 s instead of holding the tunnel until the idle timeout.
 
 ### Examples
 
@@ -121,6 +135,9 @@ java -jar target/server-*.jar --no-tui
 
 # Headless on custom port
 java -jar target/server-*.jar 5353 --no-tui
+
+# Close tunnels idle for 5 minutes
+java -jar target/server-*.jar --idle-timeout=300
 ```
 
 ## Logging
