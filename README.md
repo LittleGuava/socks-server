@@ -116,10 +116,17 @@ Traffic in a single direction — e.g. a long download — keeps the tunnel open
 quiet sessions (SSH, database connections) should enable application-level keepalives, such as
 `ServerAliveInterval` in SSH, or raise the timeout.
 
-Both legs of every tunnel also use **TCP keepalive** (first probe after 60 s of silence, then
-every 10 s, giving up after 3 unanswered probes where the OS allows tuning it), so a peer that
-vanishes without closing the connection — crash, dropped NAT mapping — is detected in about
-90 s instead of holding the tunnel until the idle timeout.
+Both legs of every tunnel also use **TCP keepalive**: first probe after 60 s of silence, then
+every 10 s, giving up after 3 unanswered probes. When the tunnel is idle and the OS allows tuning
+these values, a peer that vanishes without closing the connection (crash, dropped NAT mapping)
+is detected in about 90 s. Otherwise — data still waiting for an ACK, where the OS retransmission
+timeout applies instead, or a platform that only offers its default timing (usually 2 h before
+the first probe, logged once at startup of the first tunnel) — the idle timeout is what
+reclaims the tunnel.
+
+> **Upgrading:** tunnels used to stay open indefinitely. With the 30-minute default, quiet
+> sessions without application keepalives are now closed; pass `--idle-timeout=0` to keep the
+> previous behavior.
 
 ### Examples
 

@@ -35,7 +35,9 @@ public class ConnectionHandler {
           "SOCKS server listening on port "
               + config.port()
               + " (relay idle timeout: "
-              + (config.idleTimeout().isZero() ? "disabled" : config.idleTimeout())
+              + (config.idleTimeout().isZero()
+                  ? "disabled"
+                  : config.idleTimeout().toSeconds() + "s")
               + ")");
 
       while (true) {

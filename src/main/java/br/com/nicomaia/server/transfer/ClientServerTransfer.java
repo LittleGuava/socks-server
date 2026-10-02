@@ -6,9 +6,11 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.net.SocketOption;
+import java.net.StandardSocketOptions;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -28,8 +30,8 @@ public class ClientServerTransfer {
   /**
    * TCP keepalive probing, where the platform supports tuning it: first probe after {@code
    * KEEPALIVE_IDLE_SECONDS} of silence, then every {@code KEEPALIVE_INTERVAL_SECONDS}, giving up
-   * after {@code KEEPALIVE_COUNT} unanswered probes. Detects a vanished peer in about 90 s instead
-   * of the OS default (usually 2 h before the first probe).
+   * after {@code KEEPALIVE_COUNT} unanswered probes. Detects a vanished peer of an idle connection
+   * in about 90 s instead of the OS default (usually 2 h before the first probe).
    */
   static final int KEEPALIVE_IDLE_SECONDS = 60;
 
@@ -51,6 +53,11 @@ public class ClientServerTransfer {
   public ClientServerTransfer(Socket client, Socket server, Metrics metrics, Duration idleTimeout) {
     if (idleTimeout.isNegative()) {
       throw new IllegalArgumentException("Idle timeout must not be negative: " + idleTimeout);
+    }
+    try {
+      idleTimeout.toNanos(); // start() works in nanoseconds: fail here, not mid-relay
+    } catch (ArithmeticException e) {
+      throw new IllegalArgumentException("Idle timeout too large: " + idleTimeout, e);
     }
     this.client = client;
     this.server = server;
@@ -113,7 +120,8 @@ public class ClientServerTransfer {
                     + " <-> "
                     + server.getRemoteSocketAddress()
                     + ": idle for "
-                    + idleTimeout);
+                    + idleTimeout.toSeconds()
+                    + "s");
         closeQuietly(client);
         closeQuietly(server);
         return;
@@ -154,25 +162,42 @@ public class ClientServerTransfer {
 
   /**
    * Turns on TCP keepalive so a peer that disappeared without a FIN/RST (crash, NAT/firewall
-   * dropping the mapping, cable pulled) is detected and the relay released, even while the
-   * connection is otherwise legitimately silent. Best effort: failures are logged, not fatal.
+   * dropping the mapping, cable pulled) is detected and the relay released while the connection is
+   * silent. Keepalive only probes an idle connection: with unacknowledged data in flight the OS
+   * retransmission timeout applies instead, and the relay's idle timeout is the backstop.
+   *
+   * <p>Best effort: each option is set independently, so one the platform rejects doesn't skip the
+   * others; the first time tuning is unavailable it is logged once, since the probes then follow
+   * the OS defaults (typically 2 h before the first one).
    */
   static void enableKeepAlive(Socket socket) {
-    try {
-      socket.setKeepAlive(true);
-      setIfSupported(socket, ExtendedSocketOptions.TCP_KEEPIDLE, KEEPALIVE_IDLE_SECONDS);
-      setIfSupported(socket, ExtendedSocketOptions.TCP_KEEPINTERVAL, KEEPALIVE_INTERVAL_SECONDS);
-      setIfSupported(socket, ExtendedSocketOptions.TCP_KEEPCOUNT, KEEPALIVE_COUNT);
-    } catch (IOException | UnsupportedOperationException e) {
-      logger.log(Level.FINE, "Could not enable TCP keepalive on " + socket, e);
+    trySet(socket, StandardSocketOptions.SO_KEEPALIVE, true);
+    boolean tuned =
+        trySet(socket, ExtendedSocketOptions.TCP_KEEPIDLE, KEEPALIVE_IDLE_SECONDS)
+            & trySet(socket, ExtendedSocketOptions.TCP_KEEPINTERVAL, KEEPALIVE_INTERVAL_SECONDS)
+            & trySet(socket, ExtendedSocketOptions.TCP_KEEPCOUNT, KEEPALIVE_COUNT);
+    if (!tuned && !keepAliveTuningWarned.getAndSet(true)) {
+      logger.info(
+          "TCP keepalive timing can't be fully tuned on this platform; OS defaults apply, so dead"
+              + " peers may only be detected by the relay idle timeout");
     }
   }
 
-  private static <T> void setIfSupported(Socket socket, SocketOption<T> option, T value)
-      throws IOException {
-    if (socket.supportedOptions().contains(option)) {
-      socket.setOption(option, value);
+  private static final AtomicBoolean keepAliveTuningWarned = new AtomicBoolean();
+
+  /**
+   * @return whether the option is supported and was set
+   */
+  private static <T> boolean trySet(Socket socket, SocketOption<T> option, T value) {
+    try {
+      if (socket.supportedOptions().contains(option)) {
+        socket.setOption(option, value);
+        return true;
+      }
+    } catch (IOException | UnsupportedOperationException e) {
+      logger.log(Level.FINE, "Could not set " + option + " on " + socket, e);
     }
+    return false;
   }
 
   private void closeQuietly(Socket socket) {

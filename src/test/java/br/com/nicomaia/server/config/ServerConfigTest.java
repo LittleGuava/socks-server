@@ -136,6 +136,17 @@ class ServerConfigTest {
   }
 
   @Test
+  void shouldRejectRepeatedIdleTimeout() {
+    // Last-one-wins would silently hide a conflicting value, e.g. from a wrapper script.
+    var exception =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> fromArgs(CREDENTIALS_ENV, "--idle-timeout=60", "--idle-timeout=0"));
+
+    assertTrue(exception.getMessage().contains("more than once"));
+  }
+
+  @Test
   void shouldRejectInvalidIdleTimeout() {
     String[] invalid = {
       "--idle-timeout",
@@ -143,7 +154,9 @@ class ServerConfigTest {
       "--idle-timeout=-1",
       "--idle-timeout=5m",
       "--idle-timeout=1.5",
-      "--idle-timeout=99999999999"
+      "--idle-timeout=99999999999",
+      "--idle-timeout=+5",
+      "--idle-timeout= 5"
     };
     for (String arg : invalid) {
       var exception =

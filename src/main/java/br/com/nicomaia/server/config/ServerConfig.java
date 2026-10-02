@@ -56,6 +56,7 @@ public record ServerConfig(
   static ServerConfig fromArgs(String[] args, Metrics metrics, Function<String, String> env) {
     boolean noAuth = false;
     Duration idleTimeout = ClientServerTransfer.DEFAULT_IDLE_TIMEOUT;
+    boolean idleTimeoutGiven = false;
     List<String> positional = new ArrayList<>();
     for (String arg : args) {
       if (NO_AUTH_FLAG.equals(arg)) {
@@ -64,6 +65,10 @@ public record ServerConfig(
         throw new IllegalArgumentException(
             IDLE_TIMEOUT_OPTION + " requires a value: " + IDLE_TIMEOUT_OPTION + "=SECONDS");
       } else if (arg.startsWith(IDLE_TIMEOUT_OPTION + "=")) {
+        if (idleTimeoutGiven) {
+          throw new IllegalArgumentException(IDLE_TIMEOUT_OPTION + " given more than once");
+        }
+        idleTimeoutGiven = true;
         idleTimeout = parseIdleTimeout(arg.substring(IDLE_TIMEOUT_OPTION.length() + 1));
       } else if (arg.startsWith("-")) {
         throw new IllegalArgumentException("Unknown option: " + arg);
@@ -93,18 +98,21 @@ public record ServerConfig(
   }
 
   private static Duration parseIdleTimeout(String value) {
-    int seconds;
-    try {
-      seconds = Integer.parseInt(value);
-    } catch (NumberFormatException e) {
+    if (value.startsWith("-")) {
+      throw new IllegalArgumentException(
+          IDLE_TIMEOUT_OPTION + " must not be negative (0 disables): " + value);
+    }
+    // Plain digits only: Integer.parseInt would also accept a leading '+'.
+    if (value.isEmpty() || !value.chars().allMatch(c -> c >= '0' && c <= '9')) {
       throw new IllegalArgumentException(
           "Invalid " + IDLE_TIMEOUT_OPTION + " (whole seconds, 0 disables): " + value);
     }
-    if (seconds < 0) {
+    try {
+      return Duration.ofSeconds(Integer.parseInt(value));
+    } catch (NumberFormatException e) {
       throw new IllegalArgumentException(
-          IDLE_TIMEOUT_OPTION + " must not be negative (0 disables): " + seconds);
+          IDLE_TIMEOUT_OPTION + " too large (max " + Integer.MAX_VALUE + " seconds): " + value);
     }
-    return Duration.ofSeconds(seconds);
   }
 
   private static Socks5Authenticator authenticator(boolean noAuth, Function<String, String> env) {

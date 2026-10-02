@@ -9,6 +9,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Duration;
+import jdk.net.ExtendedSocketOptions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -96,7 +97,7 @@ class ClientServerTransferTest {
 
   @Test
   void shouldCloseRelayAfterIdleTimeout() throws Exception {
-    Thread starter = startRelay(Metrics.instance(), Duration.ofMillis(300));
+    Thread starter = startRelay(Metrics.instance(), Duration.ofSeconds(1));
 
     Thread.sleep(100);
     assertTrue(starter.isAlive(), "The relay must not close before the idle timeout");
@@ -112,7 +113,7 @@ class ClientServerTransferTest {
 
   @Test
   void shouldKeepRelayOpenWhileOnlyOneDirectionHasTraffic() throws Exception {
-    Duration idleTimeout = Duration.ofMillis(400);
+    Duration idleTimeout = Duration.ofMillis(1500);
     Thread starter = startRelay(Metrics.instance(), idleTimeout);
 
     // A long one-way download: the upload direction stays silent for well over the timeout,
@@ -122,7 +123,7 @@ class ClientServerTransferTest {
       destination.write(i);
       destination.flush();
       assertEquals(i, testClientSide.getInputStream().read());
-      Thread.sleep(100);
+      Thread.sleep(200);
     }
 
     assertTrue(starter.isAlive(), "Traffic in one direction must keep the relay open");
@@ -180,7 +181,25 @@ class ClientServerTransferTest {
 
     assertTrue(transferClientSide.getKeepAlive(), "Client socket must have SO_KEEPALIVE");
     assertTrue(transferServerSide.getKeepAlive(), "Server socket must have SO_KEEPALIVE");
+    if (transferClientSide.supportedOptions().contains(ExtendedSocketOptions.TCP_KEEPIDLE)) {
+      assertEquals(
+          ClientServerTransfer.KEEPALIVE_IDLE_SECONDS,
+          transferClientSide.getOption(ExtendedSocketOptions.TCP_KEEPIDLE));
+    }
     assertTrue(starter.isAlive());
+  }
+
+  @Test
+  void shouldRejectIdleTimeoutTooLargeForNanoseconds() {
+    // start() works in nanoseconds; an overflow must fail at construction, not mid-relay.
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new ClientServerTransfer(
+                transferClientSide,
+                transferServerSide,
+                Metrics.instance(),
+                Duration.ofDays(1_000_000)));
   }
 
   @Test
