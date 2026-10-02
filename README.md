@@ -121,7 +121,7 @@ every 10 s, giving up after 3 unanswered probes. When the tunnel is idle and the
 these values, a peer that vanishes without closing the connection (crash, dropped NAT mapping)
 is detected in about 90 s. Otherwise — data still waiting for an ACK, where the OS retransmission
 timeout applies instead, or a platform that only offers its default timing (usually 2 h before
-the first probe, logged once at startup of the first tunnel) — the idle timeout is what
+the first probe, logged once, when the first tunnel opens) — the idle timeout is what
 reclaims the tunnel.
 
 > **Upgrading:** tunnels used to stay open indefinitely. With the 30-minute default, quiet

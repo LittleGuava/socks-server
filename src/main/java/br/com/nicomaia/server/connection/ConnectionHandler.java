@@ -4,6 +4,7 @@ import br.com.nicomaia.server.config.ServerConfig;
 import br.com.nicomaia.server.metrics.Metrics;
 import br.com.nicomaia.server.protocol.HandshakeThrottle;
 import br.com.nicomaia.server.protocol.SocksProtocolHandler;
+import br.com.nicomaia.server.transfer.ClientServerTransfer;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -37,7 +38,7 @@ public class ConnectionHandler {
               + " (relay idle timeout: "
               + (config.idleTimeout().isZero()
                   ? "disabled"
-                  : config.idleTimeout().toSeconds() + "s")
+                  : ClientServerTransfer.formatDuration(config.idleTimeout()))
               + ")");
 
       while (true) {

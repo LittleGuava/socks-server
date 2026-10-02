@@ -8,6 +8,7 @@ import java.net.Socket;
 import java.net.SocketOption;
 import java.net.StandardSocketOptions;
 import java.time.Duration;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -120,8 +121,7 @@ public class ClientServerTransfer {
                     + " <-> "
                     + server.getRemoteSocketAddress()
                     + ": idle for "
-                    + idleTimeout.toSeconds()
-                    + "s");
+                    + formatDuration(idleTimeout));
         closeQuietly(client);
         closeQuietly(server);
         return;
@@ -166,38 +166,47 @@ public class ClientServerTransfer {
    * silent. Keepalive only probes an idle connection: with unacknowledged data in flight the OS
    * retransmission timeout applies instead, and the relay's idle timeout is the backstop.
    *
-   * <p>Best effort: each option is set independently, so one the platform rejects doesn't skip the
-   * others; the first time tuning is unavailable it is logged once, since the probes then follow
-   * the OS defaults (typically 2 h before the first one).
+   * <p>Best effort: each option is set independently, so one that fails doesn't skip the others,
+   * and a failure on this socket (e.g. it was closed concurrently) is only logged at FINE. Whether
+   * the platform supports tuning at all is a property of the platform, not of a socket, so it is
+   * reported once from {@link Socket#supportedOptions()}, since the probes then follow the OS
+   * defaults (typically 2 h before the first one).
    */
   static void enableKeepAlive(Socket socket) {
-    trySet(socket, StandardSocketOptions.SO_KEEPALIVE, true);
-    boolean tuned =
-        trySet(socket, ExtendedSocketOptions.TCP_KEEPIDLE, KEEPALIVE_IDLE_SECONDS)
-            & trySet(socket, ExtendedSocketOptions.TCP_KEEPINTERVAL, KEEPALIVE_INTERVAL_SECONDS)
-            & trySet(socket, ExtendedSocketOptions.TCP_KEEPCOUNT, KEEPALIVE_COUNT);
-    if (!tuned && !keepAliveTuningWarned.getAndSet(true)) {
+    if (!keepAliveTuningChecked.getAndSet(true)
+        && !socket.supportedOptions().containsAll(KEEPALIVE_TUNING_OPTIONS)) {
       logger.info(
           "TCP keepalive timing can't be fully tuned on this platform; OS defaults apply, so dead"
               + " peers may only be detected by the relay idle timeout");
     }
+    trySet(socket, StandardSocketOptions.SO_KEEPALIVE, true);
+    trySet(socket, ExtendedSocketOptions.TCP_KEEPIDLE, KEEPALIVE_IDLE_SECONDS);
+    trySet(socket, ExtendedSocketOptions.TCP_KEEPINTERVAL, KEEPALIVE_INTERVAL_SECONDS);
+    trySet(socket, ExtendedSocketOptions.TCP_KEEPCOUNT, KEEPALIVE_COUNT);
   }
 
-  private static final AtomicBoolean keepAliveTuningWarned = new AtomicBoolean();
+  private static final Set<SocketOption<?>> KEEPALIVE_TUNING_OPTIONS =
+      Set.of(
+          ExtendedSocketOptions.TCP_KEEPIDLE,
+          ExtendedSocketOptions.TCP_KEEPINTERVAL,
+          ExtendedSocketOptions.TCP_KEEPCOUNT);
 
-  /**
-   * @return whether the option is supported and was set
-   */
-  private static <T> boolean trySet(Socket socket, SocketOption<T> option, T value) {
+  private static final AtomicBoolean keepAliveTuningChecked = new AtomicBoolean();
+
+  /** {@code "1800s"}, or {@code "1500ms"} when not a whole number of seconds; never truncates. */
+  public static String formatDuration(Duration duration) {
+    long millis = duration.toMillis();
+    return millis % 1000 == 0 ? (millis / 1000) + "s" : millis + "ms";
+  }
+
+  private static <T> void trySet(Socket socket, SocketOption<T> option, T value) {
     try {
       if (socket.supportedOptions().contains(option)) {
         socket.setOption(option, value);
-        return true;
       }
     } catch (IOException | UnsupportedOperationException e) {
       logger.log(Level.FINE, "Could not set " + option + " on " + socket, e);
     }
-    return false;
   }
 
   private void closeQuietly(Socket socket) {
