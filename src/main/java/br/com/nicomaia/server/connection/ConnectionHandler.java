@@ -2,7 +2,9 @@ package br.com.nicomaia.server.connection;
 
 import br.com.nicomaia.server.config.ServerConfig;
 import br.com.nicomaia.server.metrics.Metrics;
+import br.com.nicomaia.server.protocol.HandshakeThrottle;
 import br.com.nicomaia.server.protocol.SocksProtocolHandler;
+import br.com.nicomaia.server.transfer.ClientServerTransfer;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -20,12 +22,24 @@ public class ConnectionHandler {
   public ConnectionHandler(ServerConfig config, Metrics metrics) {
     this.config = config;
     this.metrics = metrics;
-    this.protocolHandler = new SocksProtocolHandler(config.addressResolver(), config.handlers());
+    this.protocolHandler =
+        new SocksProtocolHandler(
+            config.addressResolver(),
+            config.handlers(),
+            config.authenticator(),
+            new HandshakeThrottle());
   }
 
   public void start() {
     try (var serverSocket = new ServerSocket(config.port())) {
-      logger.info("SOCKS server listening on port " + config.port());
+      logger.info(
+          "SOCKS server listening on port "
+              + config.port()
+              + " (relay idle timeout: "
+              + (config.idleTimeout().isZero()
+                  ? "disabled"
+                  : ClientServerTransfer.formatDuration(config.idleTimeout()))
+              + ")");
 
       while (true) {
         try {
