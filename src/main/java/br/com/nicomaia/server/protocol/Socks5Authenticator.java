@@ -42,8 +42,8 @@ public class Socks5Authenticator {
   }
 
   /**
-   * Gate around each credential comparison, so callers can cap how many passwords a client gets
-   * to try (see {@link HandshakeThrottle}).
+   * Gate around each credential comparison, so callers can cap how many passwords a client gets to
+   * try (see {@link HandshakeThrottle}).
    */
   public interface AttemptBudget {
 
@@ -58,7 +58,9 @@ public class Socks5Authenticator {
           public void complete(boolean credentialsValid) {}
         };
 
-    /** @return whether a comparison may happen; if not, the credentials are rejected unseen */
+    /**
+     * @return whether a comparison may happen; if not, the credentials are rejected unseen
+     */
     boolean tryReserve();
 
     /** Called exactly once after each successful {@link #tryReserve()}. */

@@ -12,23 +12,22 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Per-client limits on unauthenticated handshakes. A client is an IPv4 address or an IPv6 /64
- * (the smallest block normally assigned to one subscriber, so rotating addresses inside it gains
+ * Per-client limits on unauthenticated handshakes. A client is an IPv4 address or an IPv6 /64 (the
+ * smallest block normally assigned to one subscriber, so rotating addresses inside it gains
  * nothing).
  *
  * <ul>
- *   <li>At most {@code maxConcurrentHandshakes} handshakes in flight per client, so one host
- *       can't pin an unbounded number of sockets in the handshake phase.
- *   <li>At most {@code maxFailures} credential checks per {@code window}, counting failed ones
- *       and those still being evaluated. A check must be reserved with {@link
- *       #tryBeginAttempt(InetAddress)} before the password is compared, so opening many
- *       connections in parallel doesn't buy extra guesses. Once {@code maxFailures} checks have
- *       failed, the client is refused until the window that began with its first counted
- *       failure has elapsed.
+ *   <li>At most {@code maxConcurrentHandshakes} handshakes in flight per client, so one host can't
+ *       pin an unbounded number of sockets in the handshake phase.
+ *   <li>At most {@code maxFailures} credential checks per {@code window}, counting failed ones and
+ *       those still being evaluated. A check must be reserved with {@link
+ *       #tryBeginAttempt(InetAddress)} before the password is compared, so opening many connections
+ *       in parallel doesn't buy extra guesses. Once {@code maxFailures} checks have failed, the
+ *       client is refused until the window that began with its first counted failure has elapsed.
  * </ul>
  *
- * <p>Clients sharing one address (NAT) share these limits; legitimate clients only notice them
- * if someone behind the same address is guessing passwords.
+ * <p>Clients sharing one address (NAT) share these limits; legitimate clients only notice them if
+ * someone behind the same address is guessing passwords.
  */
 public final class HandshakeThrottle {
 
@@ -48,9 +47,9 @@ public final class HandshakeThrottle {
   }
 
   /**
-   * Generous on purpose: a legitimate client (a browser behind the proxy, or several hosts
-   * behind one NAT address) opens many connections at once, and each spends only milliseconds in
-   * the handshake. Password guesses are bounded separately by {@code maxFailures}.
+   * Generous on purpose: a legitimate client (a browser behind the proxy, or several hosts behind
+   * one NAT address) opens many connections at once, and each spends only milliseconds in the
+   * handshake. Password guesses are bounded separately by {@code maxFailures}.
    */
   static final int DEFAULT_MAX_CONCURRENT_HANDSHAKES = 64;
 
@@ -133,11 +132,11 @@ public final class HandshakeThrottle {
   }
 
   /**
-   * Reserves one credential check. Must be followed by exactly one {@link #recordFailure} or
-   * {@link #recordSuccess} when it returns {@code true}.
+   * Reserves one credential check. Must be followed by exactly one {@link #recordFailure} or {@link
+   * #recordSuccess} when it returns {@code true}.
    *
-   * @return {@code false} if the client's guess budget for the window is exhausted, counting
-   *     checks still in progress; the credentials must then be rejected without comparing them
+   * @return {@code false} if the client's guess budget for the window is exhausted, counting checks
+   *     still in progress; the credentials must then be rejected without comparing them
    */
   public boolean tryBeginAttempt(InetAddress address) {
     Instant now = clock.instant();

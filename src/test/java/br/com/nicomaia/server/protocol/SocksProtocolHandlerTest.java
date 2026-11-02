@@ -28,9 +28,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Covers the end-to-end wiring between authentication, throttling, the handshake deadline and
- * command dispatch over a real socket — what {@link Socks5AuthenticatorTest} (plain streams)
- * can't prove. Auth edge cases (rejected methods, wrong credentials, protocol version handling)
- * live there instead, since they don't need a socket at all.
+ * command dispatch over a real socket — what {@link Socks5AuthenticatorTest} (plain streams) can't
+ * prove. Auth edge cases (rejected methods, wrong credentials, protocol version handling) live
+ * there instead, since they don't need a socket at all.
  */
 class SocksProtocolHandlerTest {
 
@@ -239,8 +239,8 @@ class SocksProtocolHandlerTest {
   }
 
   /**
-   * Reads until the server closes the connection (EOF or reset) and returns what it sent. A
-   * server that never closes makes this throw once the client socket timeout expires.
+   * Reads until the server closes the connection (EOF or reset) and returns what it sent. A server
+   * that never closes makes this throw once the client socket timeout expires.
    */
   private static byte[] readUntilClosed(InputStream in) throws IOException {
     var received = new ByteArrayOutputStream();

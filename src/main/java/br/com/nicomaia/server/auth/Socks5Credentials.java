@@ -7,9 +7,8 @@ import java.util.function.Function;
 
 /**
  * Credentials required to authenticate SOCKS5 clients via the RFC 1929 username/password
- * sub-negotiation. Loaded once at startup from the {@code SOCKS_USERNAME} / {@code
- * SOCKS_PASSWORD} environment variables; the server refuses to start if either is missing or
- * invalid.
+ * sub-negotiation. Loaded once at startup from the {@code SOCKS_USERNAME} / {@code SOCKS_PASSWORD}
+ * environment variables; the server refuses to start if either is missing or invalid.
  */
 public final class Socks5Credentials {
 
@@ -31,12 +30,16 @@ public final class Socks5Credentials {
     return fromEnvironment(System::getenv);
   }
 
-  /** @param env environment lookup, e.g. {@code System::getenv} */
+  /**
+   * @param env environment lookup, e.g. {@code System::getenv}
+   */
   public static Socks5Credentials fromEnvironment(Function<String, String> env) {
     return of(requireEnv(env, USERNAME_ENV), requireEnv(env, PASSWORD_ENV));
   }
 
-  /** @return whether either credential variable is set to a non-blank value */
+  /**
+   * @return whether either credential variable is set to a non-blank value
+   */
   public static boolean isConfigured(Function<String, String> env) {
     return !isBlank(env.apply(USERNAME_ENV)) || !isBlank(env.apply(PASSWORD_ENV));
   }
@@ -74,9 +77,9 @@ public final class Socks5Credentials {
   }
 
   /**
-   * Compares the supplied credentials against the configured ones. Both fields are always
-   * compared (constant-time via {@link MessageDigest#isEqual}) so mismatches don't leak timing
-   * information about which field failed.
+   * Compares the supplied credentials against the configured ones. Both fields are always compared
+   * (constant-time via {@link MessageDigest#isEqual}) so mismatches don't leak timing information
+   * about which field failed.
    */
   public boolean matches(byte[] candidateUsername, byte[] candidatePassword) {
     Objects.requireNonNull(candidateUsername);

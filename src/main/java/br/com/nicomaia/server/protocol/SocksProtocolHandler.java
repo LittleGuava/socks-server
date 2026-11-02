@@ -26,10 +26,10 @@ public class SocksProtocolHandler {
   private static final byte RESERVED = 0x00;
 
   /**
-   * Total time a client gets to send everything it owes during the handshake: greeting,
-   * credentials and command request. It is an absolute deadline across all reads, not a per-read
-   * timeout. It does not cover resolving the requested domain name or connecting to the
-   * destination, which happen on the server side after the command request has been read.
+   * Total time a client gets to send everything it owes during the handshake: greeting, credentials
+   * and command request. It is an absolute deadline across all reads, not a per-read timeout. It
+   * does not cover resolving the requested domain name or connecting to the destination, which
+   * happen on the server side after the command request has been read.
    */
   static final Duration DEFAULT_HANDSHAKE_TIMEOUT = Duration.ofSeconds(10);
 
@@ -101,7 +101,9 @@ public class SocksProtocolHandler {
     }
   }
 
-  /** @return the client's command, or {@code null} if the handshake failed (socket closed). */
+  /**
+   * @return the client's command, or {@code null} if the handshake failed (socket closed).
+   */
   private Command performHandshake(Socket clientSocket, InetAddress peer) {
     try {
       InputStream in = new DeadlineInputStream(clientSocket, handshakeTimeout, clock);
@@ -137,7 +139,8 @@ public class SocksProtocolHandler {
               + handshakeTimeout);
     } catch (EOFException | SocketException e) {
       // Client hung up (FIN or RST) mid-handshake: scanners and impatient clients do this a lot.
-      logger.fine(() -> "Client disconnected during handshake: " + clientSocket.getRemoteSocketAddress());
+      logger.fine(
+          () -> "Client disconnected during handshake: " + clientSocket.getRemoteSocketAddress());
     } catch (Exception e) {
       logger.log(Level.WARNING, "Error handling SOCKS handshake", e);
     }
@@ -165,7 +168,9 @@ public class SocksProtocolHandler {
     };
   }
 
-  /** @return the parsed command, or {@code null} if the request header is invalid. */
+  /**
+   * @return the parsed command, or {@code null} if the request header is invalid.
+   */
   private Command readCommand(Socket clientSocket, InputStream in)
       throws IOException, ResolverNotFoundException {
     byte[] buffer = SocketReader.readFully(in, 4);

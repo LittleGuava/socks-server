@@ -11,9 +11,9 @@ import java.time.Instant;
 
 /**
  * Enforces an absolute deadline across all reads from a socket. {@code SO_TIMEOUT} alone only
- * bounds each individual {@code read()}, so a client dripping one byte just under the timeout
- * could stretch a handshake indefinitely. Before every read this narrows {@code SO_TIMEOUT} to
- * the time left until the deadline, and fails once it has passed.
+ * bounds each individual {@code read()}, so a client dripping one byte just under the timeout could
+ * stretch a handshake indefinitely. Before every read this narrows {@code SO_TIMEOUT} to the time
+ * left until the deadline, and fails once it has passed.
  */
 final class DeadlineInputStream extends FilterInputStream {
 

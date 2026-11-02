@@ -22,7 +22,8 @@ public class Main {
       * on your behalf. Only run like this in strictly controlled            *
       * environments (local development, isolated test networks) and never   *
       * on a network reachable by untrusted hosts.                           *
-      ************************************************************************""";
+      ************************************************************************\
+      """;
 
   static final String NO_AUTH_DASHBOARD_WARNING =
       "! AUTHENTICATION DISABLED (--no-auth) - controlled environments only";

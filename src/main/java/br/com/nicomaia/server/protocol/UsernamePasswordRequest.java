@@ -4,8 +4,8 @@ import java.io.IOException;
 import java.io.InputStream;
 
 /**
- * RFC 1929 username/password sub-negotiation request sent by the client after {@code USERNAME}
- * auth method is selected.
+ * RFC 1929 username/password sub-negotiation request sent by the client after {@code USERNAME} auth
+ * method is selected.
  */
 public record UsernamePasswordRequest(byte version, byte[] username, byte[] password) {
 

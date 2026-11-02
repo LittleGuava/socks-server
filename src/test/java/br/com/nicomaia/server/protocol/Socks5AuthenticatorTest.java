@@ -12,9 +12,8 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
 /**
- * Exercises {@link Socks5Authenticator} directly against in-memory streams — no real socket
- * needed, since the class depends only on {@link java.io.InputStream}/{@link
- * java.io.OutputStream}.
+ * Exercises {@link Socks5Authenticator} directly against in-memory streams — no real socket needed,
+ * since the class depends only on {@link java.io.InputStream}/{@link java.io.OutputStream}.
  */
 class Socks5AuthenticatorTest {
 
@@ -84,8 +83,7 @@ class Socks5AuthenticatorTest {
   }
 
   @Test
-  void shouldRejectEvenValidCredentialsWithoutComparingWhenBudgetIsExhausted()
-      throws IOException {
+  void shouldRejectEvenValidCredentialsWithoutComparingWhenBudgetIsExhausted() throws IOException {
     var budget = new RecordingBudget(false);
     var out = new ByteArrayOutputStream();
     var in = negotiationAndCredentials(new byte[] {0x02}, "alice", "s3cret");
@@ -144,8 +142,7 @@ class Socks5AuthenticatorTest {
   }
 
   @Test
-  void shouldRejectUnsupportedSubNegotiationVersionEvenWithValidCredentials()
-      throws IOException {
+  void shouldRejectUnsupportedSubNegotiationVersionEvenWithValidCredentials() throws IOException {
     var out = new ByteArrayOutputStream();
     // Client sends an invalid sub-negotiation VER byte (0x07 instead of 0x01).
     byte[] username = "alice".getBytes(StandardCharsets.UTF_8);
@@ -174,7 +171,8 @@ class Socks5AuthenticatorTest {
     payload.writeBytes(new byte[] {0x01, 0x05, 'a', 'l'}); // ULEN=5 but only 2 bytes follow
     var in = new ByteArrayInputStream(payload.toByteArray());
 
-    assertThrows(EOFException.class, () -> authenticator.authenticate(in, new ByteArrayOutputStream()));
+    assertThrows(
+        EOFException.class, () -> authenticator.authenticate(in, new ByteArrayOutputStream()));
   }
 
   @Test
