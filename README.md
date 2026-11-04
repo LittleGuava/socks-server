@@ -47,9 +47,14 @@ To slow down online brute force, each client — an IPv4 address, or an IPv6 /64
 **5 password checks per minute**, counting checks still in progress, so opening connections in
 parallel doesn't buy extra guesses. Once 5 have failed, the client is refused until a minute has
 passed since its first failure. Each client may also have at most **64 handshakes in progress**
-at once. Clients behind the same NAT address share these limits. Rejected handshakes, blocked
-clients and clients hitting the concurrency cap are logged as warnings with the client address
-(never the submitted username or password), so they can also feed tools such as fail2ban.
+at once. Clients behind the same NAT address share these limits. Failed logins, blocked clients
+and clients hitting the concurrency cap (once per window) are logged as warnings with the client
+address in a single format (`/203.0.113.7`, never the submitted username or password), so they
+can also feed tools such as fail2ban. Protocol mismatches — scanners, HTTP/TLS clients, wrong
+SOCKS version — and unresolvable destinations are routine noise and are logged at INFO.
+
+Resolving a requested domain name happens after the handshake, so a slow DNS server neither
+counts against the 10 s deadline nor holds one of the client's 64 handshake slots.
 
 > **Upgrading from 1.0.x:** authentication used to be disabled (`NO_AUTH` was always accepted).
 > Existing deployments must now set `SOCKS_USERNAME` and `SOCKS_PASSWORD` — including
@@ -144,10 +149,15 @@ When the TUI is **disabled** (`--no-tui`), logs go to **stdout** as usual.
 docker build -t socks-server .
 
 # Run (TUI is disabled automatically via --no-tui in Dockerfile)
+# -e without a value copies the variable from the current environment, so the password
+# isn't part of the docker command line (visible in `ps` and in the shell history).
 docker run -p 5353:5353 \
-  -e SOCKS_USERNAME=myuser \
-  -e SOCKS_PASSWORD=mypassword \
+  -e SOCKS_USERNAME \
+  -e SOCKS_PASSWORD \
   socks-server
+
+# Or keep the credentials in a file readable only by you
+docker run -p 5353:5353 --env-file socks.env socks-server
 ```
 
 ## Testing

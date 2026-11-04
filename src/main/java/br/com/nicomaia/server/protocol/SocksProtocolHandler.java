@@ -14,6 +14,7 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.logging.Level;
@@ -89,55 +90,64 @@ public class SocksProtocolHandler {
       return;
     }
 
-    Command command;
+    CommandRequest request;
     try {
-      command = performHandshake(clientSocket, peer);
+      request = performHandshake(clientSocket, peer);
     } finally {
       throttle.release(peer);
     }
+    if (request == null) {
+      return;
+    }
 
+    // Outside the handshake: name resolution has no timeout of its own and must neither eat into
+    // the client's deadline nor hold one of its throttle slots.
+    Command command = resolve(clientSocket, peer, request);
     if (command != null) {
       relay(clientSocket, command);
     }
   }
 
-  /** @return the client's command, or {@code null} if the handshake failed (socket closed). */
-  private Command performHandshake(Socket clientSocket, InetAddress peer) {
+  /** A command request as read from the wire, before the destination address is resolved. */
+  private record CommandRequest(
+      byte socksVersion, CommandType commandType, Address address, int port) {}
+
+  /** @return the client's request, or {@code null} if the handshake failed (socket closed). */
+  private CommandRequest performHandshake(Socket clientSocket, InetAddress peer) {
     try {
       InputStream in = new DeadlineInputStream(clientSocket, handshakeTimeout, clock);
 
       var outcome =
           authenticator.authenticate(in, clientSocket.getOutputStream(), attemptBudget(peer));
       if (!outcome.isAccepted()) {
-        if (outcome == Socks5Authenticator.Outcome.THROTTLED) {
+        // Never log the username: a password pasted into the username field would leak.
+        String message = "Rejected SOCKS handshake from " + peer + ": " + outcome;
+        switch (outcome) {
+          // A failed password check is what fail2ban and operators need to see.
+          case INVALID_CREDENTIALS -> logger.warning(message);
           // The block itself was already logged once; repeating it per attempt would flood.
-          logger.fine(() -> "Rejected SOCKS handshake from " + peer + ": " + outcome);
-        } else {
-          // Never log the username: a password pasted into the username field would leak.
-          logger.warning(
-              "Rejected SOCKS handshake from "
-                  + clientSocket.getRemoteSocketAddress()
-                  + ": "
-                  + outcome);
+          case THROTTLED -> logger.fine(message);
+          // Protocol mismatches (scanners, HTTP/TLS clients on the port) are routine noise.
+          default -> logger.info(message);
         }
         closeQuietly(clientSocket);
         return null;
       }
 
-      Command command = readCommand(clientSocket, in);
-      if (command == null) {
+      CommandRequest request = readCommand(peer, in);
+      if (request == null) {
         closeQuietly(clientSocket);
       }
-      return command;
+      return request;
     } catch (SocketTimeoutException e) {
       logger.info(
           "Closing connection from "
-              + clientSocket.getRemoteSocketAddress()
+              + peer
               + ": handshake not completed within "
               + handshakeTimeout);
     } catch (EOFException | SocketException e) {
       // Client hung up (FIN or RST) mid-handshake: scanners and impatient clients do this a lot.
-      logger.fine(() -> "Client disconnected during handshake: " + clientSocket.getRemoteSocketAddress());
+      logger.fine(() -> "Client disconnected during handshake: " + peer);
     } catch (Exception e) {
       logger.log(Level.WARNING, "Error handling SOCKS handshake", e);
     }
@@ -165,16 +175,15 @@ public class SocksProtocolHandler {
     };
   }
 
-  /** @return the parsed command, or {@code null} if the request header is invalid. */
-  private Command readCommand(Socket clientSocket, InputStream in)
-      throws IOException, ResolverNotFoundException {
+  /** @return the parsed request, or {@code null} if the request header is invalid. */
+  private CommandRequest readCommand(InetAddress peer, InputStream in) throws IOException {
     byte[] buffer = SocketReader.readFully(in, 4);
 
     byte socksVersion = buffer[0];
     if (socksVersion != Socks5Authenticator.SOCKS_VERSION || buffer[2] != RESERVED) {
-      logger.warning(
+      logger.info(
           "Rejected SOCKS request from "
-              + clientSocket.getRemoteSocketAddress()
+              + peer
               + ": invalid VER/RSV "
               + socksVersion
               + "/"
@@ -186,12 +195,36 @@ public class SocksProtocolHandler {
     AddressType addressType = AddressType.valueOf(buffer[3]);
 
     Address address = SocketReader.readAddress(addressType, in);
-    InetAddress inetAddress = addressResolver.resolve(address);
     int port = SocketReader.readPort(in);
+    return new CommandRequest(socksVersion, commandType, address, port);
+  }
 
-    var command = new Command(socksVersion, commandType, addressType, inetAddress, port);
-    logger.info(command.toString());
-    return command;
+  /** @return the command with its destination resolved, or {@code null} (socket closed). */
+  private Command resolve(Socket clientSocket, InetAddress peer, CommandRequest request) {
+    try {
+      Address address = request.address();
+      var command =
+          new Command(
+              request.socksVersion(),
+              request.commandType(),
+              address.addressType(),
+              addressResolver.resolve(address),
+              request.port());
+      logger.info(command.toString());
+      return command;
+    } catch (UnknownHostException e) {
+      logger.info("Closing connection from " + peer + ": cannot resolve " + e.getMessage());
+    } catch (ResolverNotFoundException e) {
+      logger.info(
+          "Closing connection from "
+              + peer
+              + ": unsupported address type "
+              + request.address().addressType());
+    } catch (Exception e) {
+      logger.log(Level.WARNING, "Error resolving SOCKS destination", e);
+    }
+    closeQuietly(clientSocket);
+    return null;
   }
 
   private void relay(Socket clientSocket, Command command) {

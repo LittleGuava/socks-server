@@ -17,13 +17,21 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -202,6 +210,127 @@ class SocksProtocolHandlerTest {
     }
   }
 
+  @Test
+  void shouldNotCountDomainResolutionAgainstHandshakeDeadline() throws Exception {
+    InetResolver slowDns =
+        address -> {
+          sleep(Duration.ofMillis(600));
+          return InetAddress.getLoopbackAddress();
+        };
+    try (var harness =
+            Harness.builder()
+                .handshakeTimeout(Duration.ofMillis(300))
+                .resolver(AddressType.DOMAIN_NAME, slowDns)
+                .start();
+        Socket client = harness.connectClient()) {
+      assertEquals(0x00, login(client, "alice", "s3cret"));
+
+      client.getOutputStream().write(connectDomain("example.test", 80));
+      client.getOutputStream().flush();
+
+      assertTrue(harness.awaitCommandDispatched(3, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void shouldFreeThrottleSlotWhileResolvingDomain() throws Exception {
+    var resolving = new CountDownLatch(1);
+    var finishResolving = new CountDownLatch(1);
+    InetResolver blockedDns =
+        address -> {
+          resolving.countDown();
+          await(finishResolving);
+          return InetAddress.getLoopbackAddress();
+        };
+    var oneHandshakeAtATime =
+        new HandshakeThrottle(1, 5, Duration.ofMinutes(1), 10_000, Clock.systemUTC());
+    try (var harness =
+            Harness.builder()
+                .throttle(oneHandshakeAtATime)
+                .resolver(AddressType.DOMAIN_NAME, blockedDns)
+                .start();
+        Socket resolvingClient = harness.connectClient()) {
+      assertEquals(0x00, login(resolvingClient, "alice", "s3cret"));
+      resolvingClient.getOutputStream().write(connectDomain("example.test", 80));
+      resolvingClient.getOutputStream().flush();
+      assertTrue(resolving.await(2, TimeUnit.SECONDS));
+
+      try (Socket nextClient = harness.connectClient()) {
+        nextClient.setSoTimeout(5_000);
+        assertEquals(0x00, login(nextClient, "alice", "s3cret"));
+      } finally {
+        finishResolving.countDown();
+      }
+      assertTrue(harness.awaitCommandDispatched(2, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void shouldCloseConnectionWhenDomainCannotBeResolved() throws Exception {
+    InetResolver failingDns =
+        address -> {
+          throw new UnknownHostException("no-such-host.test");
+        };
+    try (var logs = LogCapture.start();
+        var harness = Harness.builder().resolver(AddressType.DOMAIN_NAME, failingDns).start();
+        Socket client = harness.connectClient()) {
+      client.setSoTimeout(5_000);
+      assertEquals(0x00, login(client, "alice", "s3cret"));
+      client.getOutputStream().write(connectDomain("no-such-host.test", 80));
+      client.getOutputStream().flush();
+
+      assertEquals(0, readUntilClosed(client.getInputStream()).length);
+      assertFalse(harness.awaitCommandDispatched(100, TimeUnit.MILLISECONDS));
+      LogRecord record = logs.only("no-such-host.test");
+      assertEquals(Level.INFO, record.getLevel());
+      assertNull(record.getThrown());
+    }
+  }
+
+  @Test
+  void shouldLogProtocolRejectionsBelowWarning() throws Exception {
+    try (var logs = LogCapture.start();
+        var harness = Harness.builder().start()) {
+      try (Socket noAuthOnly = harness.connectClient()) {
+        noAuthOnly.setSoTimeout(5_000);
+        noAuthOnly.getOutputStream().write(new byte[] {0x05, 0x01, 0x00});
+        noAuthOnly.getOutputStream().flush();
+        readUntilClosed(noAuthOnly.getInputStream());
+      }
+      try (Socket badReserved = harness.connectClient()) {
+        badReserved.setSoTimeout(5_000);
+        assertEquals(0x00, login(badReserved, "alice", "s3cret"));
+        byte[] request = CONNECT_LOOPBACK_80.clone();
+        request[2] = 0x7F;
+        badReserved.getOutputStream().write(request);
+        badReserved.getOutputStream().flush();
+        readUntilClosed(badReserved.getInputStream());
+      }
+
+      assertEquals(Level.INFO, logs.only("NO_ACCEPTABLE_METHOD").getLevel());
+      assertEquals(Level.INFO, logs.only("invalid VER/RSV").getLevel());
+      assertEquals(List.of(), logs.atOrAbove(Level.WARNING));
+    }
+  }
+
+  @Test
+  void shouldLogInvalidCredentialsAsWarningWithClientAddressOnly() throws Exception {
+    try (var logs = LogCapture.start();
+        var harness = Harness.builder().start();
+        Socket client = harness.connectClient()) {
+      client.setSoTimeout(5_000);
+      assertEquals(0x01, login(client, "alice", "wrong-password"));
+      readUntilClosed(client.getInputStream());
+
+      LogRecord record = logs.only("INVALID_CREDENTIALS");
+      assertEquals(Level.WARNING, record.getLevel());
+      // Same address format as the "Blocking ..." line, so one fail2ban regex matches both.
+      String peer = "/" + InetAddress.getLoopbackAddress().getHostAddress();
+      assertEquals(
+          "Rejected SOCKS handshake from " + peer + ": INVALID_CREDENTIALS", record.getMessage());
+    }
+  }
+
   /** Performs greeting + RFC 1929 login and returns the sub-negotiation status byte. */
   private static int login(Socket client, String username, String password) throws IOException {
     OutputStream out = client.getOutputStream();
@@ -216,6 +345,32 @@ class SocksProtocolHandlerTest {
     byte[] reply = in.readNBytes(2);
     assertEquals(0x01, reply[0]);
     return reply[1];
+  }
+
+  private static byte[] connectDomain(String host, int port) {
+    byte[] name = host.getBytes(StandardCharsets.US_ASCII);
+    var bytes = new ByteArrayOutputStream();
+    bytes.writeBytes(new byte[] {0x05, 0x01, 0x00, 0x03, (byte) name.length});
+    bytes.writeBytes(name);
+    bytes.write(port >> 8);
+    bytes.write(port & 0xFF);
+    return bytes.toByteArray();
+  }
+
+  private static void sleep(Duration duration) {
+    try {
+      Thread.sleep(duration);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  private static void await(CountDownLatch latch) {
+    try {
+      latch.await(5, TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   private static byte[] fullHandshake(String username, String password) {
@@ -255,6 +410,59 @@ class SocksProtocolHandlerTest {
     return received.toByteArray();
   }
 
+  /** Records what {@link SocksProtocolHandler} logs while a test runs. */
+  private static final class LogCapture extends Handler implements AutoCloseable {
+    private static final Logger LOGGER = Logger.getLogger(SocksProtocolHandler.class.getName());
+    private final List<LogRecord> records = new CopyOnWriteArrayList<>();
+
+    static LogCapture start() {
+      var capture = new LogCapture();
+      capture.setLevel(Level.ALL);
+      LOGGER.addHandler(capture);
+      return capture;
+    }
+
+    /** The single record mentioning {@code text}, waiting briefly for it to be logged. */
+    LogRecord only(String text) throws InterruptedException {
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      List<LogRecord> matches = mentioning(text);
+      while (matches.isEmpty() && System.nanoTime() < deadline) {
+        Thread.sleep(10);
+        matches = mentioning(text);
+      }
+      assertEquals(1, matches.size(), "records mentioning '" + text + "': " + messages());
+      return matches.getFirst();
+    }
+
+    List<String> atOrAbove(Level level) {
+      return records.stream()
+          .filter(r -> r.getLevel().intValue() >= level.intValue())
+          .map(LogRecord::getMessage)
+          .toList();
+    }
+
+    private List<LogRecord> mentioning(String text) {
+      return records.stream().filter(r -> r.getMessage().contains(text)).toList();
+    }
+
+    private List<String> messages() {
+      return records.stream().map(r -> r.getLevel() + " " + r.getMessage()).toList();
+    }
+
+    @Override
+    public void publish(LogRecord record) {
+      records.add(record);
+    }
+
+    @Override
+    public void flush() {}
+
+    @Override
+    public void close() {
+      LOGGER.removeHandler(this);
+    }
+  }
+
   /** Spins up a real loopback server socket wired to a {@link SocksProtocolHandler}. */
   private static final class Harness implements AutoCloseable {
     private final ServerSocket serverSocket;
@@ -262,11 +470,13 @@ class SocksProtocolHandlerTest {
     private final AtomicInteger commandHandlerSoTimeout = new AtomicInteger(-1);
 
     private Harness(
-        Socks5Authenticator authenticator, HandshakeThrottle throttle, Duration handshakeTimeout)
+        Socks5Authenticator authenticator,
+        HandshakeThrottle throttle,
+        Duration handshakeTimeout,
+        Map<AddressType, InetResolver> resolvers)
         throws IOException {
       this.serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
 
-      Map<AddressType, InetResolver> resolvers = Map.of(AddressType.IPV4, new IpInetResolver());
       var addressResolver = new AddressResolver(resolvers);
       var handlers = new HandlersHolder();
       handlers.register(
@@ -330,6 +540,8 @@ class SocksProtocolHandlerTest {
       private Socks5Authenticator authenticator = AUTHENTICATOR;
       private HandshakeThrottle throttle = new HandshakeThrottle();
       private Duration handshakeTimeout = SocksProtocolHandler.DEFAULT_HANDSHAKE_TIMEOUT;
+      private final Map<AddressType, InetResolver> resolvers =
+          new HashMap<>(Map.of(AddressType.IPV4, new IpInetResolver()));
 
       Builder authenticator(Socks5Authenticator authenticator) {
         this.authenticator = authenticator;
@@ -346,8 +558,13 @@ class SocksProtocolHandlerTest {
         return this;
       }
 
+      Builder resolver(AddressType addressType, InetResolver resolver) {
+        resolvers.put(addressType, resolver);
+        return this;
+      }
+
       Harness start() throws IOException {
-        return new Harness(authenticator, throttle, handshakeTimeout);
+        return new Harness(authenticator, throttle, handshakeTimeout, resolvers);
       }
     }
   }
