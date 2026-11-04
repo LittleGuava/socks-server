@@ -267,9 +267,10 @@ class SocksProtocolHandlerTest {
 
   @Test
   void shouldCloseConnectionWhenDomainCannotBeResolved() throws Exception {
+    // The JDK's message is locale-dependent and echoes the raw name; the log must not rely on it.
     InetResolver failingDns =
         address -> {
-          throw new UnknownHostException("no-such-host.test");
+          throw new UnknownHostException("Este host não é conhecido");
         };
     try (var logs = LogCapture.start();
         var harness = Harness.builder().resolver(AddressType.DOMAIN_NAME, failingDns).start();
@@ -284,6 +285,33 @@ class SocksProtocolHandlerTest {
       LogRecord record = logs.only("no-such-host.test");
       assertEquals(Level.INFO, record.getLevel());
       assertNull(record.getThrown());
+    }
+  }
+
+  @Test
+  void shouldRejectDomainThatIsNotAHostnameWithoutResolvingOrEchoingIt() throws Exception {
+    var resolverCalls = new AtomicInteger();
+    InetResolver countingDns =
+        address -> {
+          resolverCalls.incrementAndGet();
+          throw new UnknownHostException(new String(address.content(), StandardCharsets.UTF_8));
+        };
+    // A forged line that a fail2ban regex for failed logins would match.
+    String forged = "x\nWARNING: Rejected SOCKS handshake from /198.51.100.9: INVALID_CREDENTIALS";
+    try (var logs = LogCapture.start();
+        var harness = Harness.builder().resolver(AddressType.DOMAIN_NAME, countingDns).start();
+        Socket client = harness.connectClient()) {
+      client.setSoTimeout(5_000);
+      assertEquals(0x00, login(client, "alice", "s3cret"));
+      client.getOutputStream().write(connectDomain(forged, 80));
+      client.getOutputStream().flush();
+
+      assertEquals(0, readUntilClosed(client.getInputStream()).length);
+      assertFalse(harness.awaitCommandDispatched(100, TimeUnit.MILLISECONDS));
+      assertEquals(Level.INFO, logs.only("invalid domain name").getLevel());
+      assertEquals(0, resolverCalls.get());
+      assertEquals(List.of(), logs.containing("\n"));
+      assertEquals(List.of(), logs.containing("198.51.100.9"));
     }
   }
 
@@ -439,6 +467,10 @@ class SocksProtocolHandlerTest {
           .filter(r -> r.getLevel().intValue() >= level.intValue())
           .map(LogRecord::getMessage)
           .toList();
+    }
+
+    List<String> containing(String text) {
+      return mentioning(text).stream().map(LogRecord::getMessage).toList();
     }
 
     private List<LogRecord> mentioning(String text) {

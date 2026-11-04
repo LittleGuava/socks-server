@@ -15,6 +15,7 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.logging.Level;
@@ -196,7 +197,38 @@ public class SocksProtocolHandler {
 
     Address address = SocketReader.readAddress(addressType, in);
     int port = SocketReader.readPort(in);
+    if (addressType == AddressType.DOMAIN_NAME && !isHostname(address.content())) {
+      // Not echoed: a name with a line break could forge log lines that fail2ban would act on.
+      logger.info("Rejected SOCKS request from " + peer + ": invalid domain name");
+      return null;
+    }
     return new CommandRequest(socksVersion, commandType, address, port);
+  }
+
+  /** Letters, digits, '-', '_' and '.' only: enough for any DNS name, and safe to log. */
+  private static boolean isHostname(byte[] name) {
+    if (name.length == 0) {
+      return false;
+    }
+    for (byte b : name) {
+      boolean allowed =
+          (b >= 'a' && b <= 'z')
+              || (b >= 'A' && b <= 'Z')
+              || (b >= '0' && b <= '9')
+              || b == '-'
+              || b == '_'
+              || b == '.';
+      if (!allowed) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static String describe(Address address) {
+    return address.addressType() == AddressType.DOMAIN_NAME
+        ? new String(address.content(), StandardCharsets.US_ASCII)
+        : address.addressType().toString();
   }
 
   /** @return the command with its destination resolved, or {@code null} (socket closed). */
@@ -213,7 +245,8 @@ public class SocksProtocolHandler {
       logger.info(command.toString());
       return command;
     } catch (UnknownHostException e) {
-      logger.info("Closing connection from " + peer + ": cannot resolve " + e.getMessage());
+      logger.info(
+          "Closing connection from " + peer + ": cannot resolve " + describe(request.address()));
     } catch (ResolverNotFoundException e) {
       logger.info(
           "Closing connection from "
